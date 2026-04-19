@@ -30,7 +30,7 @@ The write path does the minimum: validate → embed → insert → return. Every
 
 ## 4. Agent-native wire contract
 
-Every retrieval tool returns the envelope `{ results, truncated, total_available, budget_spent }`. Every response respects a caller-supplied `max_tokens` budget and reports actual spend. Schema-tested; deviations break the build.
+Every retrieval tool returns the envelope `{ results, truncated, total_available, budget_spent_tokens }`. Every response respects a caller-supplied `max_tokens` budget and reports actual spend. Schema-tested; deviations break the build.
 
 **Rules out:** ad-hoc response shapes per tool. Token-unbounded results. Silent truncation.
 
@@ -80,5 +80,5 @@ Each entry in `Cargo.toml` has a one-line comment stating what it's for and what
 
 ## Companion docs
 
-- `rust/docs/starting-shape.md` — v0.0.1 scope, schema, wire contract (next to be written).
+- `rust/docs/starting-shape.md` — v0.0.1 scope, schema, wire contract.
 - `docs/research/master-plan.md` — strategic roadmap (still authoritative for the *what*; this doc governs the *how*).
