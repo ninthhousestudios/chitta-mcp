@@ -10,7 +10,8 @@ use crate::error::{ChittaError, Result};
 
 /// Profile: 1-128 chars, `[a-zA-Z0-9_-]+`.
 pub fn profile(tool: &'static str, value: &str) -> Result<()> {
-    let len_ok = !value.is_empty() && value.len() <= 128;
+    let char_count = value.chars().count();
+    let len_ok = (1..=128).contains(&char_count);
     let chars_ok =
         value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if !len_ok || !chars_ok {
@@ -43,7 +44,8 @@ pub fn content_non_empty(tool: &'static str, value: &str) -> Result<()> {
 
 /// Idempotency key: 1-128 chars, no control characters.
 pub fn idempotency_key(tool: &'static str, value: &str) -> Result<()> {
-    let len_ok = !value.is_empty() && value.len() <= 128;
+    let char_count = value.chars().count();
+    let len_ok = (1..=128).contains(&char_count);
     let no_control = value.chars().all(|c| !c.is_control());
     if !len_ok || !no_control {
         return Err(ChittaError::InvalidArgument {
@@ -114,6 +116,53 @@ pub fn tags(tool: &'static str, values: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Upper bound on `k` for search. Chosen so a single response cannot dwarf
+/// the agent's context window even with long snippets; callers that need more
+/// results should page via tag or time filters.
+pub const MAX_K: i64 = 200;
+
+/// `k` for search: integer in `[1, MAX_K]`.
+pub fn k(tool: &'static str, value: i64) -> Result<()> {
+    if !(1..=MAX_K).contains(&value) {
+        return Err(ChittaError::InvalidArgument {
+            tool,
+            argument: "k".to_string(),
+            constraint: format!("integer in [1, {MAX_K}]"),
+            received: Some(json!(value)),
+            next_action: format!("Pass k between 1 and {MAX_K} (default is 10)."),
+        });
+    }
+    Ok(())
+}
+
+/// Cosine similarity floor: finite float in `[0.0, 1.0]`.
+pub fn min_similarity(tool: &'static str, value: f32) -> Result<()> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ChittaError::InvalidArgument {
+            tool,
+            argument: "min_similarity".to_string(),
+            constraint: "finite float in [0.0, 1.0]".to_string(),
+            received: Some(json!(value)),
+            next_action: "Pass min_similarity between 0.0 and 1.0 inclusive.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Token budget: positive.
+pub fn max_tokens(tool: &'static str, value: u64) -> Result<()> {
+    if value == 0 {
+        return Err(ChittaError::InvalidArgument {
+            tool,
+            argument: "max_tokens".to_string(),
+            constraint: "> 0".to_string(),
+            received: Some(json!(value)),
+            next_action: "Pass a positive max_tokens, or omit to disable the budget.".to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Parse a UUID argument, translating parse errors to a populated
 /// `InvalidArgument`.
 pub fn parse_uuid(tool: &'static str, argument: &'static str, value: &str) -> Result<Uuid> {
@@ -144,6 +193,40 @@ mod tests {
         assert!(idempotency_key("t", "key-1").is_ok());
         assert!(idempotency_key("t", "").is_err());
         assert!(idempotency_key("t", "has\ncontrol").is_err());
+        // 128 four-byte code points = 512 bytes, must be accepted (was rejected
+        // when we measured bytes instead of chars).
+        let multibyte: String = "😀".repeat(128);
+        assert_eq!(multibyte.chars().count(), 128);
+        assert!(idempotency_key("t", &multibyte).is_ok());
+        let too_long: String = "😀".repeat(129);
+        assert!(idempotency_key("t", &too_long).is_err());
+    }
+
+    #[test]
+    fn k_rules() {
+        assert!(k("t", 1).is_ok());
+        assert!(k("t", MAX_K).is_ok());
+        assert!(k("t", 0).is_err());
+        assert!(k("t", -5).is_err());
+        assert!(k("t", MAX_K + 1).is_err());
+    }
+
+    #[test]
+    fn min_similarity_rules() {
+        assert!(min_similarity("t", 0.0).is_ok());
+        assert!(min_similarity("t", 0.5).is_ok());
+        assert!(min_similarity("t", 1.0).is_ok());
+        assert!(min_similarity("t", -0.01).is_err());
+        assert!(min_similarity("t", 1.01).is_err());
+        assert!(min_similarity("t", f32::NAN).is_err());
+        assert!(min_similarity("t", f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn max_tokens_rules() {
+        assert!(max_tokens("t", 1).is_ok());
+        assert!(max_tokens("t", u64::MAX).is_ok());
+        assert!(max_tokens("t", 0).is_err());
     }
 
     #[test]

@@ -146,10 +146,28 @@ pub async fn get_memory_by_id(
     Ok(row)
 }
 
+/// Internal row shape: a search hit plus the window-count of all matches.
+/// Each returned row carries the same `total_available`; callers split it out.
+#[derive(Debug, Clone, FromRow)]
+struct SearchHitWithTotal {
+    id: Uuid,
+    content: String,
+    event_time: DateTime<Utc>,
+    record_time: DateTime<Utc>,
+    tags: Vec<String>,
+    similarity: f32,
+    total_available: i64,
+}
+
 /// Semantic search with optional tag filter and similarity floor.
 ///
 /// Tag match is OR: a row passes if it shares at least one tag with `tags`.
 /// When `tags` is empty, no tag filter is applied.
+///
+/// Returns `(hits, total_available)`: `total_available` is the count of rows
+/// matching the filters before `k`-limiting, computed in the same query via
+/// `COUNT(*) OVER ()` so we pay one round-trip, not two. When no rows match,
+/// `total_available` is `0`.
 pub async fn search_by_embedding(
     pool: &PgPool,
     profile: &str,
@@ -157,11 +175,12 @@ pub async fn search_by_embedding(
     k: i64,
     tags: &[String],
     min_similarity: f32,
-) -> Result<Vec<SearchHit>> {
+) -> Result<(Vec<SearchHit>, i64)> {
     // `1 - (embedding <=> $2)::real` gives cosine similarity in [0, 1] for
     // L2-normalized vectors. We filter on it directly so HNSW still drives
-    // the ordering.
-    let hits = sqlx::query_as::<_, SearchHit>(
+    // the ordering. `count(*) over ()` returns the pre-limit match count
+    // repeated on every row.
+    let rows = sqlx::query_as::<_, SearchHitWithTotal>(
         r#"
         select
             id,
@@ -169,7 +188,8 @@ pub async fn search_by_embedding(
             event_time,
             record_time,
             tags,
-            (1.0 - (embedding <=> $2))::real as similarity
+            (1.0 - (embedding <=> $2))::real as similarity,
+            (count(*) over ())::bigint as total_available
         from memories
         where profile = $1
           and ($3::text[] = '{}' or tags && $3)
@@ -185,32 +205,18 @@ pub async fn search_by_embedding(
     .bind(k)
     .fetch_all(pool)
     .await?;
-    Ok(hits)
-}
 
-/// Count of rows that would pass the filters, ignoring `k` and token budget.
-/// Used for the envelope's `total_available` field.
-pub async fn count_matching(
-    pool: &PgPool,
-    profile: &str,
-    query: &Vector,
-    tags: &[String],
-    min_similarity: f32,
-) -> Result<i64> {
-    let (count,): (i64,) = sqlx::query_as(
-        r#"
-        select count(*)::bigint
-        from memories
-        where profile = $1
-          and ($3::text[] = '{}' or tags && $3)
-          and (1.0 - (embedding <=> $2))::real >= $4
-        "#,
-    )
-    .bind(profile)
-    .bind(query)
-    .bind(tags)
-    .bind(min_similarity)
-    .fetch_one(pool)
-    .await?;
-    Ok(count)
+    let total = rows.first().map(|r| r.total_available).unwrap_or(0);
+    let hits = rows
+        .into_iter()
+        .map(|r| SearchHit {
+            id: r.id,
+            content: r.content,
+            event_time: r.event_time,
+            record_time: r.record_time,
+            tags: r.tags,
+            similarity: r.similarity,
+        })
+        .collect();
+    Ok((hits, total))
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use pgvector::Vector;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -20,24 +21,31 @@ use crate::tools::validate;
 
 const TOOL: &str = "search_memories";
 
-/// Hard cap on `k` — we fetch (k + buffer) candidates so min_similarity
-/// filtering upstream of us leaves enough results. v0.0.1 uses k directly.
+/// Default `k` when the caller does not set one.
 const DEFAULT_K: i64 = 10;
 
 /// Snippet length in chars (not bytes). Verbatim prefix; no ellipsis.
 const SNIPPET_CHARS: usize = 200;
 
-#[derive(Debug, Deserialize)]
+/// Arguments for `search_memories`. `JsonSchema` is derived so rmcp exposes
+/// the same shape callers use on the wire.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchArgs {
+    /// Profile scope.
     pub profile: String,
+    /// Natural-language query.
     pub query: String,
-    #[serde(default)]
+    /// Max number of results. Default 10; hard cap `validate::MAX_K`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k: Option<i64>,
-    #[serde(default)]
+    /// Stop adding results once `budget_spent_tokens` would exceed this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
-    #[serde(default)]
+    /// OR-match: a memory matches if it has any of these tags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-    #[serde(default)]
+    /// Cosine-similarity floor in `[0.0, 1.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_similarity: Option<f32>,
 }
 
@@ -69,11 +77,16 @@ pub async fn handle(
         });
     }
 
-    let k = args.k.unwrap_or(DEFAULT_K).max(1);
+    let k = args.k.unwrap_or(DEFAULT_K);
+    validate::k(TOOL, k)?;
     let max_tokens = args.max_tokens;
+    if let Some(cap) = max_tokens {
+        validate::max_tokens(TOOL, cap)?;
+    }
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
     let min_similarity = args.min_similarity.unwrap_or(0.0);
+    validate::min_similarity(TOOL, min_similarity)?;
 
     // Embedding off the async worker.
     let embedder_clone = embedder.clone();
@@ -84,37 +97,22 @@ pub async fn handle(
 
     let query_vec = Vector::from(embedding_vec);
 
-    let hits =
+    let (hits, total_available) =
         db::search_by_embedding(pool, &args.profile, &query_vec, k, &tags, min_similarity).await?;
-    let total_available =
-        db::count_matching(pool, &args.profile, &query_vec, &tags, min_similarity).await?;
 
-    // Build results with token-budget truncation.
-    let mut results: Vec<SearchHit> = Vec::with_capacity(hits.len());
-    let mut spent: u64 = 0;
-    let mut truncated = false;
-    for hit in hits {
-        let snippet = prefix_chars(&hit.content, SNIPPET_CHARS);
-        let candidate = SearchHit {
+    let candidates: Vec<SearchHit> = hits
+        .into_iter()
+        .map(|hit| SearchHit {
             id: hit.id,
-            snippet,
+            snippet: prefix_chars(&hit.content, SNIPPET_CHARS),
             similarity: hit.similarity,
             event_time: hit.event_time,
             record_time: hit.record_time,
             tags: hit.tags,
-        };
-        if let Some(cap) = max_tokens {
-            let candidate_tokens = estimate_tokens(&candidate);
-            if spent + candidate_tokens > cap && !results.is_empty() {
-                truncated = true;
-                break;
-            }
-            spent += candidate_tokens;
-        } else {
-            spent += estimate_tokens(&candidate);
-        }
-        results.push(candidate);
-    }
+        })
+        .collect();
+
+    let (results, mut truncated) = apply_budget(candidates, max_tokens);
 
     // `k` bound is applied by SQL `limit`, but if the DB returned fewer rows
     // than `total_available`, that was a hard `k` cut — flag `truncated`.
@@ -122,15 +120,39 @@ pub async fn handle(
         truncated = true;
     }
 
-    // Envelope overhead — the three scalar fields contribute a handful of
-    // bytes; we account the results above and add a small constant here.
-    let envelope_overhead = 12; // ~ ceil(48 bytes / 4)
-    Ok(Envelope::new(
-        results,
-        truncated,
-        Some(total_available as u64),
-        spent + envelope_overhead,
-    ))
+    // Build the envelope, then overwrite `budget_spent_tokens` with the
+    // estimator applied to the fully-assembled payload. This avoids a
+    // magic-constant overhead and matches what the wire will carry.
+    let mut envelope = Envelope::new(results, truncated, Some(total_available as u64), 0);
+    envelope.budget_spent_tokens = estimate_tokens(&envelope);
+    Ok(envelope)
+}
+
+/// Truncate `candidates` to fit `max_tokens`.
+///
+/// Returns `(results, truncated)`. When `max_tokens` is `None`, every
+/// candidate is kept and `truncated` is `false`. When set, we include the
+/// first candidate unconditionally (an empty envelope is less useful than an
+/// oversize first result — callers that want strict budgeting should pass a
+/// cap large enough to fit at least one hit), then stop adding once the next
+/// candidate would push the running token count over `cap`.
+fn apply_budget(candidates: Vec<SearchHit>, max_tokens: Option<u64>) -> (Vec<SearchHit>, bool) {
+    let Some(cap) = max_tokens else {
+        return (candidates, false);
+    };
+    let mut results: Vec<SearchHit> = Vec::with_capacity(candidates.len());
+    let mut spent: u64 = 0;
+    let mut truncated = false;
+    for candidate in candidates {
+        let candidate_tokens = estimate_tokens(&candidate);
+        if !results.is_empty() && spent.saturating_add(candidate_tokens) > cap {
+            truncated = true;
+            break;
+        }
+        spent = spent.saturating_add(candidate_tokens);
+        results.push(candidate);
+    }
+    (results, truncated)
 }
 
 /// Verbatim char-prefix of `s` up to `max_chars` Unicode scalar values.
@@ -142,6 +164,7 @@ fn prefix_chars(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn prefix_chars_truncates_at_boundary() {
@@ -158,5 +181,55 @@ mod tests {
     fn prefix_chars_handles_multi_byte_unicode() {
         let s = "αβγδε"; // 5 chars, 10 bytes
         assert_eq!(prefix_chars(s, 3), "αβγ");
+    }
+
+    fn hit(snippet: &str) -> SearchHit {
+        let t = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap();
+        SearchHit {
+            id: Uuid::now_v7(),
+            snippet: snippet.to_string(),
+            similarity: 0.9,
+            event_time: t,
+            record_time: t,
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn apply_budget_none_keeps_all() {
+        let candidates = vec![hit("a"), hit("b"), hit("c")];
+        let (results, truncated) = apply_budget(candidates, None);
+        assert_eq!(results.len(), 3);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn apply_budget_tight_keeps_at_least_one() {
+        // Any single hit is larger than 1 token. We still get the first.
+        let (results, truncated) = apply_budget(vec![hit("first"), hit("second")], Some(1));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].snippet, "first");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn apply_budget_stops_before_overflow() {
+        // Estimate each hit, pick a cap that fits exactly one.
+        let h1 = hit("one");
+        let h2 = hit("two");
+        let per = estimate_tokens(&h1);
+        let cap = per; // fits the first, blocks the second
+        let (results, truncated) = apply_budget(vec![h1, h2], Some(cap));
+        assert_eq!(results.len(), 1);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn apply_budget_fits_full_list_when_cap_is_ample() {
+        let candidates = vec![hit("a"), hit("b"), hit("c")];
+        let total: u64 = candidates.iter().map(estimate_tokens).sum();
+        let (results, truncated) = apply_budget(candidates, Some(total + 100));
+        assert_eq!(results.len(), 3);
+        assert!(!truncated);
     }
 }

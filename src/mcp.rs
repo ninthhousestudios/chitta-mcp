@@ -13,8 +13,6 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::embedding::Embedder;
@@ -35,57 +33,11 @@ impl ChittaServer {
     }
 }
 
-// ---- rmcp-visible argument schemas -----------------------------------
-//
-// rmcp's tool macro uses `schemars::JsonSchema` to generate the tool's
-// input schema on the wire. The internal `tools::*Args` types are
-// deserialize-only; these mirror them with schemars derives.
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StoreArgs {
-    /// Target profile namespace. 1-128 chars, [a-zA-Z0-9_-]+ only.
-    pub profile: String,
-    /// Verbatim memory text. Stored as-is (Principle 1).
-    pub content: String,
-    /// Client-supplied dedup key. Same (profile, idempotency_key) returns the prior row.
-    pub idempotency_key: String,
-    /// When the subject happened. ISO-8601. Defaults to record_time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_time: Option<chrono::DateTime<chrono::Utc>>,
-    /// Optional tags. Up to 32, each 1-64 chars.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GetArgs {
-    /// Profile scope.
-    pub profile: String,
-    /// Memory UUID.
-    pub id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SearchArgs {
-    /// Profile scope.
-    pub profile: String,
-    /// Natural-language query.
-    pub query: String,
-    /// Max number of results. Default 10.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub k: Option<i64>,
-    /// Stop adding results once `budget_spent_tokens` would exceed this.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u64>,
-    /// OR-match: a memory matches if it has any of these tags.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    /// Cosine-similarity floor in [0.0, 1.0].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_similarity: Option<f32>,
-}
-
 // ---- Tool handlers ---------------------------------------------------
+//
+// The `tools::*Args` types carry `#[derive(JsonSchema)]` directly, so rmcp
+// publishes them on the wire from a single source of truth — no mirror
+// structs, no field-drift risk.
 
 #[tool_router(router = tool_router)]
 impl ChittaServer {
@@ -95,16 +47,9 @@ impl ChittaServer {
                           idempotent_replay=true.")]
     pub async fn store_memory(
         &self,
-        Parameters(args): Parameters<StoreArgs>,
+        Parameters(args): Parameters<tools::StoreArgs>,
     ) -> Result<Json<serde_json::Value>, ErrorData> {
-        let inner = tools::StoreArgs {
-            profile: args.profile,
-            content: args.content,
-            idempotency_key: args.idempotency_key,
-            event_time: args.event_time,
-            tags: args.tags,
-        };
-        let out = tools::store::handle(&self.pool, self.embedder.clone(), inner)
+        let out = tools::store::handle(&self.pool, self.embedder.clone(), args)
             .await
             .map_err(chitta_to_rmcp)?;
         let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;
@@ -116,10 +61,9 @@ impl ChittaServer {
                           Errors with not_found if the id is unknown in that profile.")]
     pub async fn get_memory(
         &self,
-        Parameters(args): Parameters<GetArgs>,
+        Parameters(args): Parameters<tools::GetArgs>,
     ) -> Result<Json<serde_json::Value>, ErrorData> {
-        let inner = tools::GetArgs { profile: args.profile, id: args.id };
-        let out = tools::get::handle(&self.pool, inner).await.map_err(chitta_to_rmcp)?;
+        let out = tools::get::handle(&self.pool, args).await.map_err(chitta_to_rmcp)?;
         let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;
         Ok(Json(v))
     }
@@ -130,17 +74,9 @@ impl ChittaServer {
                           Call get_memory(id) to read full content.")]
     pub async fn search_memories(
         &self,
-        Parameters(args): Parameters<SearchArgs>,
+        Parameters(args): Parameters<tools::SearchArgs>,
     ) -> Result<Json<serde_json::Value>, ErrorData> {
-        let inner = tools::SearchArgs {
-            profile: args.profile,
-            query: args.query,
-            k: args.k,
-            max_tokens: args.max_tokens,
-            tags: args.tags,
-            min_similarity: args.min_similarity,
-        };
-        let out = tools::search::handle(&self.pool, self.embedder.clone(), inner)
+        let out = tools::search::handle(&self.pool, self.embedder.clone(), args)
             .await
             .map_err(chitta_to_rmcp)?;
         let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;

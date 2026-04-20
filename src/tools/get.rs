@@ -4,6 +4,7 @@
 //! error whose `next_action` points at `search_memories`.
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -14,9 +15,13 @@ use crate::tools::validate;
 
 const TOOL: &str = "get_memory";
 
-#[derive(Debug, Deserialize)]
+/// Arguments for `get_memory`. `JsonSchema` is derived so rmcp exposes the
+/// same shape callers use on the wire.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetArgs {
+    /// Profile scope.
     pub profile: String,
+    /// Memory UUID.
     pub id: String,
 }
 

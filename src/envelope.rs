@@ -57,9 +57,9 @@ mod tests {
 
     #[test]
     fn estimate_tokens_rounds_up_ceil() {
-        // 5 bytes → ceil(5/4) = 2
-        assert_eq!(estimate_tokens(&"abcd"), 2); // JSON: "abcd" is 6 bytes → ceil(6/4)=2
-        // empty object: 2 bytes → 1
+        // JSON-serialized "abcd" is 6 bytes (quotes included) → ceil(6/4)=2.
+        assert_eq!(estimate_tokens(&"abcd"), 2);
+        // empty object serializes to "{}" (2 bytes) → ceil(2/4)=1.
         let empty: std::collections::BTreeMap<String, String> = Default::default();
         assert_eq!(estimate_tokens(&empty), 1);
     }

@@ -80,7 +80,10 @@ impl Embedder {
             .map_err(|e| ChittaError::Embedding {
                 tool: "store_memory",
                 message: format!("tokenizer error: {e}"),
-                next_action: "Ensure content is valid UTF-8.".to_string(),
+                next_action:
+                    "Tokenizer failed to encode the input. Verify CHITTA_MODEL_PATH contains the \
+                     tokenizer.json that matches the deployed BGE-M3 ONNX export."
+                        .to_string(),
             })?;
 
         let ids = encoding.get_ids();

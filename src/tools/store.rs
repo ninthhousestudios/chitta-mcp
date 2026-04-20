@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use pgvector::Vector;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -19,14 +20,22 @@ use crate::tools::validate;
 
 const TOOL: &str = "store_memory";
 
-#[derive(Debug, Deserialize)]
+/// Arguments for `store_memory`. Derives `JsonSchema` so rmcp can publish the
+/// input schema on the wire — single source of truth for CLI and MCP.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StoreArgs {
+    /// Target profile namespace. 1-128 chars, `[a-zA-Z0-9_-]+` only.
     pub profile: String,
+    /// Verbatim memory text. Stored as-is (Principle 1).
     pub content: String,
+    /// Client-supplied dedup key. Same `(profile, idempotency_key)` returns
+    /// the prior row with `idempotent_replay=true`.
     pub idempotency_key: String,
-    #[serde(default)]
+    /// When the subject happened. ISO-8601. Defaults to `record_time`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_time: Option<DateTime<Utc>>,
-    #[serde(default)]
+    /// Optional tags. Up to 32, each 1-64 chars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
 }
 
@@ -65,19 +74,25 @@ pub async fn handle(
     }
 
     // Embedding is CPU-bound; hand it to spawn_blocking so we do not block
-    // the tokio worker for multi-millisecond stretches.
+    // the tokio worker for multi-millisecond stretches. We move `content`
+    // into the closure and return it alongside the embedding so we neither
+    // clone the string nor keep the whole `args` alive across the await.
     let embedder_clone = embedder.clone();
-    let content_for_embed = args.content.clone();
-    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&content_for_embed))
-        .await
-        .map_err(|e| crate::error::ChittaError::Internal(format!("spawn_blocking failed: {e}")))??;
+    let content_owned = args.content;
+    let (content, embedding_vec) = tokio::task::spawn_blocking(move || {
+        let emb = embedder_clone.embed(&content_owned);
+        (content_owned, emb)
+    })
+    .await
+    .map_err(|e| crate::error::ChittaError::Internal(format!("spawn_blocking failed: {e}")))?;
+    let embedding_vec = embedding_vec?;
 
     let now = Utc::now();
     let event_time = args.event_time.unwrap_or(now);
     let row = MemoryRow {
         id: Uuid::now_v7(),
         profile: args.profile,
-        content: args.content,
+        content,
         embedding: Vector::from(embedding_vec),
         event_time,
         record_time: now,
