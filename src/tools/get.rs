@@ -1,0 +1,55 @@
+//! `get_memory` handler.
+//!
+//! Profile-scoped fetch by UUID. Returns the full row or a `not_found`
+//! error whose `next_action` points at `search_memories`.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::db;
+use crate::error::{ChittaError, Result};
+use crate::tools::validate;
+
+const TOOL: &str = "get_memory";
+
+#[derive(Debug, Deserialize)]
+pub struct GetArgs {
+    pub profile: String,
+    pub id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetOutput {
+    pub id: Uuid,
+    pub profile: String,
+    pub content: String,
+    pub event_time: DateTime<Utc>,
+    pub record_time: DateTime<Utc>,
+    pub tags: Vec<String>,
+}
+
+pub async fn handle(pool: &PgPool, args: GetArgs) -> Result<GetOutput> {
+    validate::profile(TOOL, &args.profile)?;
+    let id = validate::parse_uuid(TOOL, "id", &args.id)?;
+
+    let row = db::get_memory_by_id(pool, &args.profile, id).await?.ok_or_else(|| {
+        ChittaError::NotFound {
+            tool: TOOL,
+            kind: "memory",
+            next_action:
+                "Verify the profile and id, or call search_memories to locate the intended memory."
+                    .to_string(),
+        }
+    })?;
+
+    Ok(GetOutput {
+        id: row.id,
+        profile: row.profile,
+        content: row.content,
+        event_time: row.event_time,
+        record_time: row.record_time,
+        tags: row.tags,
+    })
+}
