@@ -50,6 +50,11 @@ pub struct StoreOutput {
     pub idempotent_replay: bool,
 }
 
+#[tracing::instrument(
+    name = "tool.store_memory",
+    skip(pool, embedder, args),
+    fields(profile = %args.profile, content_len = args.content.len()),
+)]
 pub async fn handle(
     pool: &PgPool,
     embedder: Arc<Embedder>,
@@ -64,14 +69,12 @@ pub async fn handle(
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
 
-    // Fast-path replay: avoid embedding if the key is already used.
-    // (Not a correctness guarantee — the unique index is the source of
-    // truth. This just spares the ONNX pass on the common replay case.)
-    if let Some(existing) =
-        db::find_by_idempotency_key(pool, &args.profile, &args.idempotency_key).await?
-    {
-        return Ok(row_to_output(existing, true));
-    }
+    // No fast-path replay check: the unique index on (profile,
+    // idempotency_key) is the source of truth, and `insert_or_fetch_memory`
+    // handles 23505 by returning the prior row. On the common cold-write
+    // path, a pre-flight SELECT costs a pointless round-trip; on replay we
+    // pay the embedding cost we would have paid anyway. Correctness lives
+    // in the constraint, not in the handler.
 
     // Embedding is CPU-bound; hand it to spawn_blocking so we do not block
     // the tokio worker for multi-millisecond stretches. We move `content`

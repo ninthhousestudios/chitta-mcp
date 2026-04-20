@@ -35,6 +35,11 @@ pub struct GetOutput {
     pub tags: Vec<String>,
 }
 
+#[tracing::instrument(
+    name = "tool.get_memory",
+    skip(pool, args),
+    fields(profile = %args.profile, id = %args.id),
+)]
 pub async fn handle(pool: &PgPool, args: GetArgs) -> Result<GetOutput> {
     validate::profile(TOOL, &args.profile)?;
     let id = validate::parse_uuid(TOOL, "id", &args.id)?;

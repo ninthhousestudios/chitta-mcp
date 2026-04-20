@@ -61,13 +61,22 @@ pub struct SearchHit {
 
 pub type SearchOutput = Envelope<SearchHit>;
 
+#[tracing::instrument(
+    name = "tool.search_memories",
+    skip(pool, embedder, args),
+    fields(profile = %args.profile, k = ?args.k, has_tags = args.tags.is_some()),
+)]
 pub async fn handle(
     pool: &PgPool,
     embedder: Arc<Embedder>,
     args: SearchArgs,
 ) -> Result<SearchOutput> {
-    validate::profile(TOOL, &args.profile)?;
-    if args.query.is_empty() {
+    // Destructure up front so we can move `query` into spawn_blocking
+    // without cloning and still use the other fields afterward.
+    let SearchArgs { profile, query, k, max_tokens, tags, min_similarity } = args;
+
+    validate::profile(TOOL, &profile)?;
+    if query.is_empty() {
         return Err(ChittaError::InvalidArgument {
             tool: TOOL,
             argument: "query".to_string(),
@@ -77,28 +86,27 @@ pub async fn handle(
         });
     }
 
-    let k = args.k.unwrap_or(DEFAULT_K);
+    let k = k.unwrap_or(DEFAULT_K);
     validate::k(TOOL, k)?;
-    let max_tokens = args.max_tokens;
     if let Some(cap) = max_tokens {
         validate::max_tokens(TOOL, cap)?;
     }
-    let tags = args.tags.unwrap_or_default();
+    let tags = tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
-    let min_similarity = args.min_similarity.unwrap_or(0.0);
+    let min_similarity = min_similarity.unwrap_or(0.0);
     validate::min_similarity(TOOL, min_similarity)?;
 
-    // Embedding off the async worker.
+    // Embedding off the async worker. `query` is moved into the closure —
+    // no clone.
     let embedder_clone = embedder.clone();
-    let query_text = args.query.clone();
-    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&query_text))
+    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&query))
         .await
         .map_err(|e| ChittaError::Internal(format!("spawn_blocking failed: {e}")))??;
 
     let query_vec = Vector::from(embedding_vec);
 
     let (hits, total_available) =
-        db::search_by_embedding(pool, &args.profile, &query_vec, k, &tags, min_similarity).await?;
+        db::search_by_embedding(pool, &profile, &query_vec, k, &tags, min_similarity).await?;
 
     let candidates: Vec<SearchHit> = hits
         .into_iter()
@@ -131,17 +139,24 @@ pub async fn handle(
 /// Truncate `candidates` to fit `max_tokens`.
 ///
 /// Returns `(results, truncated)`. When `max_tokens` is `None`, every
-/// candidate is kept and `truncated` is `false`. When set, we include the
-/// first candidate unconditionally (an empty envelope is less useful than an
-/// oversize first result — callers that want strict budgeting should pass a
-/// cap large enough to fit at least one hit), then stop adding once the next
-/// candidate would push the running token count over `cap`.
+/// candidate is kept and `truncated` is `false`. When set, the first
+/// candidate is always included (an empty envelope is less useful than an
+/// oversize first result); subsequent candidates are rejected if they would
+/// push the *full envelope's* token count over `cap`. The cap accounts for
+/// envelope wrapper fields (`results`, `truncated`, `total_available`,
+/// `budget_spent_tokens`), not just hit payloads — so the number the caller
+/// sees is the number the cap enforced against.
 fn apply_budget(candidates: Vec<SearchHit>, max_tokens: Option<u64>) -> (Vec<SearchHit>, bool) {
     let Some(cap) = max_tokens else {
         return (candidates, false);
     };
+    // Seed `spent` with the fixed overhead of an empty envelope — the
+    // wrapper JSON exists even when `results` is `[]`, and callers who
+    // pass a tight cap should see truncation triggered honestly.
+    let empty: Envelope<SearchHit> = Envelope::new(vec![], false, None, 0);
+    let overhead = estimate_tokens(&empty);
     let mut results: Vec<SearchHit> = Vec::with_capacity(candidates.len());
-    let mut spent: u64 = 0;
+    let mut spent = overhead;
     let mut truncated = false;
     for candidate in candidates {
         let candidate_tokens = estimate_tokens(&candidate);

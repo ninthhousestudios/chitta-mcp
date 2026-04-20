@@ -292,8 +292,9 @@ Tag match is OR: a memory matches if it has *any* of the supplied tags.
 
 **Truncation rules:**
 - Hard cap at `k` results.
-- If `max_tokens` is set, stop appending results when the next result would push `budget_spent_tokens` over the cap. Set `truncated: true`.
-- `total_available` is the count of rows that passed `min_similarity` + `tags` filters (before `k`/`max_tokens`). Computed from the ANN query's candidate set; may be inexact at large scales but honest at our sizes.
+- If `max_tokens` is set, stop appending results when the next result would push the *full envelope's* `budget_spent_tokens` over the cap (envelope wrapper overhead is counted, not just hit payloads). Set `truncated: true`.
+- `total_available` is the count of rows matching `profile` + `tags` filter — it deliberately **ignores `min_similarity`**. Counting rows above a cosine threshold would require scanning every embedding, defeating the ANN index. The caller gets a truthful ceiling on candidate breadth; `results` reports the similarity-gated subset, with `truncated` set when the HNSW+floor combination trimmed below `total_available`.
+- pgvector's `hnsw.ef_search` is raised per-query (floor 200, scaled with `k`) so filter post-selection does not silently shrink result count. The setting is scoped to a single transaction — it does not leak across pool connections.
 
 ---
 

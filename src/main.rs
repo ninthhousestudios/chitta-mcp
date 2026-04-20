@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
     let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");
@@ -81,4 +82,12 @@ async fn shutdown_signal() {
         _ = int.recv() => {}
         _ = term.recv() => {}
     }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    // Non-Unix fallback: Ctrl-C only (no SIGTERM equivalent). v0.0.1 targets
+    // Linux/macOS; this keeps the code compiling on Windows for contributors
+    // running `cargo check` locally.
+    let _ = tokio::signal::ctrl_c().await;
 }

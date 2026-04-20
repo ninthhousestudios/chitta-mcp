@@ -196,3 +196,95 @@ fn error_data_skip_serializes_none_fields() {
     assert!(!v.as_object().unwrap().contains_key("argument"));
     assert!(!v.as_object().unwrap().contains_key("received"));
 }
+
+// ---- JSON-RPC wire mapping (chitta_to_rmcp) -------------------------
+//
+// Walk every variant through the mcp-side mapper and assert that the
+// resulting `ErrorData` serializes with the JSON-RPC code we expect and a
+// `data` payload carrying the Principle 8 triple (`tool`, `constraint`,
+// `next_action`). If the mapper drops a field or misroutes a code, this
+// test — not a client in the wild — surfaces the regression.
+
+#[test]
+fn chitta_to_rmcp_preserves_code_and_contract_fields() {
+    use chitta_rs::mcp::chitta_to_rmcp;
+    use std::io;
+
+    let variants: Vec<(ChittaError, i32)> = vec![
+        (
+            ChittaError::MissingConfig {
+                name: "DATABASE_URL",
+                next_action: "set it".to_string(),
+            },
+            codes::INVALID_PARAMS,
+        ),
+        (
+            ChittaError::InvalidArgument {
+                tool: "store_memory",
+                argument: "profile".to_string(),
+                constraint: "1-128 chars".to_string(),
+                received: Some(json!("")),
+                next_action: "pass a profile".to_string(),
+            },
+            codes::INVALID_PARAMS,
+        ),
+        (
+            ChittaError::ContentTooLong { tool: "store_memory", token_count: 9001 },
+            codes::INVALID_PARAMS,
+        ),
+        (
+            ChittaError::NotFound {
+                tool: "get_memory",
+                kind: "memory",
+                next_action: "verify id".to_string(),
+            },
+            codes::INVALID_PARAMS,
+        ),
+        (
+            ChittaError::Embedding {
+                tool: "store_memory",
+                message: "ort error".to_string(),
+                next_action: "restart".to_string(),
+            },
+            codes::INTERNAL_ERROR,
+        ),
+        (ChittaError::Db(sqlx::Error::PoolTimedOut), codes::INTERNAL_ERROR),
+        (
+            ChittaError::Db(sqlx::Error::Io(io::Error::other("reset"))),
+            codes::INTERNAL_ERROR,
+        ),
+        (
+            ChittaError::Migrate(sqlx::migrate::MigrateError::Execute(
+                sqlx::Error::Io(io::Error::other("drift")),
+            )),
+            codes::INTERNAL_ERROR,
+        ),
+        (ChittaError::Internal("unexpected".to_string()), codes::INTERNAL_ERROR),
+    ];
+
+    for (variant, expected_code) in variants {
+        // Format the variant for diagnostics before moving it into the mapper.
+        let label = format!("{variant:?}");
+        let mapped = chitta_to_rmcp(variant);
+        let wire = serde_json::to_value(&mapped).expect("ErrorData serializes");
+        let obj = wire.as_object().expect("ErrorData is a JSON object");
+
+        let code = obj
+            .get("code")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| panic!("missing `code` for {label}: {wire}"));
+        assert_eq!(code as i32, expected_code, "code mismatch for {label}");
+
+        let message = obj.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(!message.is_empty(), "empty `message` for {label}");
+
+        let data = obj
+            .get("data")
+            .and_then(|v| v.as_object())
+            .unwrap_or_else(|| panic!("missing `data` object for {label}: {wire}"));
+        for required in ["tool", "constraint", "next_action"] {
+            let v = data.get(required).and_then(|v| v.as_str()).unwrap_or("");
+            assert!(!v.is_empty(), "missing `data.{required}` for {label}: {wire}");
+        }
+    }
+}

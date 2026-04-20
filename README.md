@@ -29,11 +29,14 @@ shape and design rationale.
 ```bash
 createdb chitta_rs
 cp .env.example .env          # edit DATABASE_URL if needed
-cargo run                     # starts the MCP server on stdio
+cargo build --release         # compile the binary
 ```
 
 The binary is a stdio-transport MCP server. It reads JSON-RPC frames from
-stdin and writes responses to stdout; logs go to stderr.
+stdin and writes responses to stdout; logs go to stderr. **Do not run
+`cargo run` bare in a terminal** — the process will block waiting for an
+MCP client to speak JSON-RPC on stdin, and look hung. Launch it from an
+MCP client instead (see below).
 
 ## Connecting from an MCP client
 
@@ -61,7 +64,7 @@ Point your client's server entry at the compiled binary. For Claude Code's
 | Variable | Default | Notes |
 |---|---|---|
 | `DATABASE_URL` | *(required)* | libpq-compatible Postgres URL. |
-| `CHITTA_MODEL_PATH` | `~/.cache/chitta/bge-m3-onnx` | Directory with the ONNX model + tokenizer. |
+| `CHITTA_MODEL_PATH` | `~/.cache/chitta/bge-m3-onnx` | Directory with the ONNX model + tokenizer. **Must be an absolute path** — no `~` expansion is performed. The default is constructed from `$HOME` at startup. |
 | `CHITTA_LOG_LEVEL` | `info` | `tracing_subscriber` env filter syntax. |
 | `ORT_DYLIB_PATH` | *(loader default)* | Path to `libonnxruntime.so` when it's not on the default path. |
 

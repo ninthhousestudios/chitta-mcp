@@ -146,28 +146,29 @@ pub async fn get_memory_by_id(
     Ok(row)
 }
 
-/// Internal row shape: a search hit plus the window-count of all matches.
-/// Each returned row carries the same `total_available`; callers split it out.
-#[derive(Debug, Clone, FromRow)]
-struct SearchHitWithTotal {
-    id: Uuid,
-    content: String,
-    event_time: DateTime<Utc>,
-    record_time: DateTime<Utc>,
-    tags: Vec<String>,
-    similarity: f32,
-    total_available: i64,
-}
+/// Minimum `hnsw.ef_search` used for every semantic query. pgvector's
+/// default is 40, which both caps HNSW candidate breadth and undershoots
+/// any WHERE post-filter that rejects most of those candidates. We raise
+/// the floor so (a) `min_similarity`/tag filters don't silently shrink
+/// result counts and (b) `LIMIT k` actually returns ~k rows when matches
+/// exist. Capped at `HNSW_EF_SEARCH_MAX` to bound per-query work.
+const HNSW_EF_SEARCH_MIN: i64 = 200;
+const HNSW_EF_SEARCH_MAX: i64 = 1000;
 
 /// Semantic search with optional tag filter and similarity floor.
 ///
 /// Tag match is OR: a row passes if it shares at least one tag with `tags`.
 /// When `tags` is empty, no tag filter is applied.
 ///
-/// Returns `(hits, total_available)`: `total_available` is the count of rows
-/// matching the filters before `k`-limiting, computed in the same query via
-/// `COUNT(*) OVER ()` so we pay one round-trip, not two. When no rows match,
-/// `total_available` is `0`.
+/// Returns `(hits, total_available)`. `total_available` is the count of rows
+/// matching **profile + tag filter** — it deliberately ignores
+/// `min_similarity`, because counting rows above a cosine threshold would
+/// require scanning every embedding, defeating the ANN index. The agent gets
+/// a truthful ceiling on candidate breadth; the similarity-gated subset is
+/// what `results` reports.
+///
+/// Runs inside a short transaction so `SET LOCAL hnsw.ef_search` scopes to
+/// the ANN query only and doesn't leak to other pool users.
 pub async fn search_by_embedding(
     pool: &PgPool,
     profile: &str,
@@ -176,11 +177,36 @@ pub async fn search_by_embedding(
     tags: &[String],
     min_similarity: f32,
 ) -> Result<(Vec<SearchHit>, i64)> {
+    // Cheap pre-count under the same filters we expose to the caller.
+    // No distance term here — it's a sequential filter count, bounded by
+    // the size of the profile.
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        select count(*)::bigint
+        from memories
+        where profile = $1
+          and ($2::text[] = '{}' or tags && $2)
+        "#,
+    )
+    .bind(profile)
+    .bind(tags)
+    .fetch_one(pool)
+    .await?;
+
+    // ef_search is an integer GUC; SET LOCAL does not accept bind params,
+    // so we clamp to a known-safe integer range and format inline. k is
+    // already range-checked by the validator; the clamp below is belt +
+    // suspenders against a future caller reaching this fn with a bad k.
+    let ef_search = (k.max(1) * 4).clamp(HNSW_EF_SEARCH_MIN, HNSW_EF_SEARCH_MAX);
+    let mut tx = pool.begin().await?;
+    sqlx::query(&format!("set local hnsw.ef_search = {ef_search}"))
+        .execute(&mut *tx)
+        .await?;
+
     // `1 - (embedding <=> $2)::real` gives cosine similarity in [0, 1] for
     // L2-normalized vectors. We filter on it directly so HNSW still drives
-    // the ordering. `count(*) over ()` returns the pre-limit match count
-    // repeated on every row.
-    let rows = sqlx::query_as::<_, SearchHitWithTotal>(
+    // the ordering.
+    let hits = sqlx::query_as::<_, SearchHit>(
         r#"
         select
             id,
@@ -188,8 +214,7 @@ pub async fn search_by_embedding(
             event_time,
             record_time,
             tags,
-            (1.0 - (embedding <=> $2))::real as similarity,
-            (count(*) over ())::bigint as total_available
+            (1.0 - (embedding <=> $2))::real as similarity
         from memories
         where profile = $1
           and ($3::text[] = '{}' or tags && $3)
@@ -203,20 +228,9 @@ pub async fn search_by_embedding(
     .bind(tags)
     .bind(min_similarity)
     .bind(k)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
-    let total = rows.first().map(|r| r.total_available).unwrap_or(0);
-    let hits = rows
-        .into_iter()
-        .map(|r| SearchHit {
-            id: r.id,
-            content: r.content,
-            event_time: r.event_time,
-            record_time: r.record_time,
-            tags: r.tags,
-            similarity: r.similarity,
-        })
-        .collect();
+    tx.commit().await?;
     Ok((hits, total))
 }

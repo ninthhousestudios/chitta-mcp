@@ -4,6 +4,19 @@
 //! call tokenizes, rejects > 8192 tokens, runs the ONNX session, and returns
 //! a 1024-dim `Vec<f32>`.
 //!
+//! # Concurrency caveat (read before enabling new transports)
+//!
+//! The ONNX session lives behind a blocking [`Mutex`]. `ort 2.0.0-rc.10`'s
+//! `Session::run` takes `&mut self`, so we can't share it directly. For
+//! v0.0.1 this is fine because the stdio transport is single-request by
+//! construction: only one tool call is ever in flight. **The moment a
+//! transport pipelines requests — v0.0.2 HTTP, any concurrent MCP client
+//! — this mutex becomes a global embedding bottleneck.** Before shipping
+//! such a transport, replace the mutex with (a) a dedicated embedder
+//! thread pool fed by an mpsc queue, or (b) an `ort` version that supports
+//! `&self` inference, or (c) a pool of sessions. Do not add a second
+//! transport without revisiting this.
+//!
 //! # Model output note
 //!
 //! The `yuniko-software/bge-m3-onnx` export (which the Python chitta reads

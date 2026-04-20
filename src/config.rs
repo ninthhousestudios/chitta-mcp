@@ -55,38 +55,80 @@ fn default_model_path() -> PathBuf {
 mod tests {
     use super::*;
 
-    // Tests mutate process env; run them sequentially to avoid cross-test
-    // interference. `cargo test` defaults to parallel, so we gate on a mutex.
+    // Tests in this module mutate the process-wide environment. Rust 2024
+    // marks `std::env::set_var`/`remove_var` `unsafe` because concurrent env
+    // access from other threads is UB. We confine every env mutation to
+    // `with_env` below, which:
+    //   1. Acquires a module-static Mutex so only one test holds env at a time.
+    //   2. Applies the requested deltas, runs the closure, then restores the
+    //      prior values regardless of panic outcome.
+    // Keeping `unsafe` blocks in exactly one place makes the invariant
+    // auditable: every env write in this crate's test code goes through here.
     use std::sync::Mutex;
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[test]
-    fn missing_database_url_is_invalid_params() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // Safe because the lock serializes env access in this test module.
-        unsafe { std::env::remove_var("DATABASE_URL") };
-        let err = Config::from_env().unwrap_err();
-        match err {
-            ChittaError::MissingConfig { name, next_action } => {
-                assert_eq!(name, "DATABASE_URL");
-                assert!(next_action.contains("DATABASE_URL"));
+    /// Apply `deltas` (name, value — `None` removes the var) around `f`, then
+    /// restore prior values. Serialized via [`ENV_LOCK`]; safe as long as no
+    /// other code in the crate mutates env outside this helper.
+    fn with_env<R>(deltas: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior: Vec<(String, Option<String>)> = deltas
+            .iter()
+            .map(|(k, _)| ((*k).to_string(), std::env::var(k).ok()))
+            .collect();
+        // Safe: ENV_LOCK serializes every env-touching test in this crate.
+        unsafe {
+            for (k, v) in deltas {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
             }
-            other => panic!("unexpected error: {other:?}"),
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe {
+            for (k, v) in &prior {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+        match result {
+            Ok(r) => r,
+            Err(p) => std::panic::resume_unwind(p),
         }
     }
 
     #[test]
+    fn missing_database_url_is_invalid_params() {
+        with_env(&[("DATABASE_URL", None)], || {
+            let err = Config::from_env().unwrap_err();
+            match err {
+                ChittaError::MissingConfig { name, next_action } => {
+                    assert_eq!(name, "DATABASE_URL");
+                    assert!(next_action.contains("DATABASE_URL"));
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
     fn defaults_when_only_database_url_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("DATABASE_URL", "postgres://localhost/chitta_rs");
-            std::env::remove_var("CHITTA_MODEL_PATH");
-            std::env::remove_var("CHITTA_LOG_LEVEL");
-        }
-        let cfg = Config::from_env().unwrap();
-        assert_eq!(cfg.log_level, "info");
-        assert!(cfg.model_path.ends_with(".cache/chitta/bge-m3-onnx"));
-        assert!(cfg.model_file().ends_with("bge_m3_model.onnx"));
-        assert!(cfg.tokenizer_file().ends_with("tokenizer.json"));
+        with_env(
+            &[
+                ("DATABASE_URL", Some("postgres://localhost/chitta_rs")),
+                ("CHITTA_MODEL_PATH", None),
+                ("CHITTA_LOG_LEVEL", None),
+            ],
+            || {
+                let cfg = Config::from_env().unwrap();
+                assert_eq!(cfg.log_level, "info");
+                assert!(cfg.model_path.ends_with(".cache/chitta/bge-m3-onnx"));
+                assert!(cfg.model_file().ends_with("bge_m3_model.onnx"));
+                assert!(cfg.tokenizer_file().ends_with("tokenizer.json"));
+            },
+        );
     }
 }

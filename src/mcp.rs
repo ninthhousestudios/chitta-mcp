@@ -103,7 +103,11 @@ impl ServerHandler for ChittaServer {
 
 // ---- Error translation -----------------------------------------------
 
-fn chitta_to_rmcp(e: ChittaError) -> ErrorData {
+/// Translate a [`ChittaError`] into rmcp's `ErrorData` shape. `pub` so the
+/// contract test suite can exercise every variant through the actual mapper
+/// — if this fn ever drops a field or misroutes a code, `tests/contract.rs`
+/// catches it.
+pub fn chitta_to_rmcp(e: ChittaError) -> ErrorData {
     let code = e.code();
     let message = e.message();
     let data = serde_json::to_value(e.data()).ok();
