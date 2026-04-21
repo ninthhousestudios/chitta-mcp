@@ -28,7 +28,9 @@ use chitta_rs::config::Config;
 use chitta_rs::db;
 use chitta_rs::embedding::Embedder;
 use chitta_rs::error::ChittaError;
-use chitta_rs::tools::{self, GetArgs, SearchArgs, StoreArgs};
+use chitta_rs::tools::{
+    self, DeleteArgs, GetArgs, ListArgs, SearchArgs, StoreArgs, UpdateArgs,
+};
 use sqlx::PgPool;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -90,6 +92,9 @@ async fn try_shared() -> Option<SharedSetup> {
         db_acquire_timeout_secs: 5,
         db_idle_timeout_secs: 600,
         embedder_pool_size: 1,
+        query_log: false,
+        http_addr: "127.0.0.1".into(),
+        http_port: 3100,
     };
 
     if !cfg.model_file().is_file() || !cfg.tokenizer_file().is_file() {
@@ -133,6 +138,9 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
         db_acquire_timeout_secs: 5,
         db_idle_timeout_secs: 600,
         embedder_pool_size: 1,
+        query_log: false,
+        http_addr: "127.0.0.1".into(),
+        http_port: 3100,
     };
     let pool = match db::connect(&cfg).await {
         Ok(p) => p,
@@ -234,6 +242,7 @@ async fn search_envelope_has_four_fields_on_empty_profile() {
     let out = tools::search::handle(
         &h.pool,
         h.embedder.clone(),
+        false,
         SearchArgs {
             profile: h.profile.clone(),
             query: "nothing will match".into(),
@@ -279,6 +288,7 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
     let out = tools::search::handle(
         &h.pool,
         h.embedder.clone(),
+        false,
         SearchArgs {
             profile,
             query: "quick fox".into(),
@@ -369,6 +379,7 @@ async fn search_snippet_is_verbatim_prefix() {
     let out = tools::search::handle(
         &h.pool,
         h.embedder.clone(),
+        false,
         SearchArgs {
             profile,
             query: "alpha".into(),
@@ -410,6 +421,7 @@ async fn profile_isolation_keeps_searches_scoped() {
     let in_b = tools::search::handle(
         &h.pool,
         h.embedder.clone(),
+        false,
         SearchArgs {
             profile: profile_b,
             query: "zebra".into(),
@@ -515,6 +527,7 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
     let out = tools::search::handle(
         &h.pool,
         h.embedder.clone(),
+        false,
         SearchArgs {
             profile,
             query: "postgres pool tuning".into(),
@@ -532,6 +545,452 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
     assert_eq!(top.id, stored.id);
     assert!(top.similarity > 0.5, "expected strong similarity, got {}", top.similarity);
     assert!(top.tags.contains(&"db".to_string()));
+}
+
+// ---- v0.0.2 tests -----------------------------------------------------
+
+#[tokio::test]
+async fn update_memory_content_reembeds() {
+    let h = require_harness!("upd_content");
+    let profile = h.profile.clone();
+
+    let stored = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "original content about databases".into(),
+            idempotency_key: "uc-1".into(),
+            event_time: None,
+            tags: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = tools::update::handle(
+        &h.pool,
+        h.embedder.clone(),
+        UpdateArgs {
+            profile: profile.clone(),
+            id: stored.id.to_string(),
+            content: Some("completely new content about cooking".into()),
+            tags: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.id, stored.id);
+    assert!(updated.re_embedded, "content change must trigger re-embed");
+
+    let fetched = tools::get::handle(
+        &h.pool,
+        GetArgs { profile, id: stored.id.to_string() },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fetched.content, "completely new content about cooking");
+}
+
+#[tokio::test]
+async fn update_memory_tags_only_no_reembed() {
+    let h = require_harness!("upd_tags");
+    let profile = h.profile.clone();
+
+    let stored = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "tags-only update test content".into(),
+            idempotency_key: "ut-1".into(),
+            event_time: None,
+            tags: Some(vec!["old".into()]),
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = tools::update::handle(
+        &h.pool,
+        h.embedder.clone(),
+        UpdateArgs {
+            profile: profile.clone(),
+            id: stored.id.to_string(),
+            content: None,
+            tags: Some(vec!["new-tag".into(), "another".into()]),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.id, stored.id);
+    assert!(!updated.re_embedded, "tags-only update must not re-embed");
+    assert_eq!(updated.content, "tags-only update test content");
+    assert_eq!(updated.tags, vec!["new-tag".to_string(), "another".to_string()]);
+}
+
+#[tokio::test]
+async fn update_memory_not_found() {
+    let h = require_harness!("upd_miss");
+
+    let err = tools::update::handle(
+        &h.pool,
+        h.embedder.clone(),
+        UpdateArgs {
+            profile: h.profile.clone(),
+            id: Uuid::now_v7().to_string(),
+            content: Some("anything".into()),
+            tags: None,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    match &err {
+        ChittaError::NotFound { .. } => {}
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn update_memory_requires_at_least_one_field() {
+    let h = require_harness!("upd_empty");
+
+    let err = tools::update::handle(
+        &h.pool,
+        h.embedder.clone(),
+        UpdateArgs {
+            profile: h.profile.clone(),
+            id: Uuid::now_v7().to_string(),
+            content: None,
+            tags: None,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    match &err {
+        ChittaError::InvalidArgument { argument, .. } => {
+            assert!(
+                argument.contains("content") || argument.contains("tags"),
+                "error should mention content/tags, got: {argument}"
+            );
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn delete_memory_removes_row() {
+    let h = require_harness!("del_ok");
+    let profile = h.profile.clone();
+
+    let stored = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "memory to delete".into(),
+            idempotency_key: "d-1".into(),
+            event_time: None,
+            tags: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let del = tools::delete::handle(
+        &h.pool,
+        DeleteArgs { profile: profile.clone(), id: stored.id.to_string() },
+    )
+    .await
+    .unwrap();
+    assert!(del.deleted);
+    assert_eq!(del.id, stored.id);
+
+    // get should now fail with NotFound.
+    let err = tools::get::handle(
+        &h.pool,
+        GetArgs { profile, id: stored.id.to_string() },
+    )
+    .await
+    .unwrap_err();
+
+    match &err {
+        ChittaError::NotFound { .. } => {}
+        other => panic!("expected NotFound after delete, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn delete_memory_not_found() {
+    let h = require_harness!("del_miss");
+
+    let err = tools::delete::handle(
+        &h.pool,
+        DeleteArgs { profile: h.profile.clone(), id: Uuid::now_v7().to_string() },
+    )
+    .await
+    .unwrap_err();
+
+    match &err {
+        ChittaError::NotFound { .. } => {}
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn list_recent_returns_time_ordered() {
+    let h = require_harness!("list_ord");
+    let profile = h.profile.clone();
+
+    // Store 3 memories sequentially to get distinct record_times.
+    for i in 0..3 {
+        tools::store::handle(
+            &h.pool,
+            h.embedder.clone(),
+            StoreArgs {
+                profile: profile.clone(),
+                content: format!("list order memory {i}"),
+                idempotency_key: format!("lo-{i}"),
+                event_time: None,
+                tags: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let out = tools::list::handle(
+        &h.pool,
+        ListArgs { profile, limit: None, tags: None },
+    )
+    .await
+    .unwrap();
+
+    assert!(out.memories.len() >= 3);
+    // Verify DESC ordering: each record_time >= the next.
+    for pair in out.memories.windows(2) {
+        assert!(
+            pair[0].record_time >= pair[1].record_time,
+            "list must be ordered by record_time DESC: {:?} before {:?}",
+            pair[0].record_time,
+            pair[1].record_time,
+        );
+    }
+}
+
+#[tokio::test]
+async fn list_recent_respects_limit() {
+    let h = require_harness!("list_lim");
+    let profile = h.profile.clone();
+
+    for i in 0..3 {
+        tools::store::handle(
+            &h.pool,
+            h.embedder.clone(),
+            StoreArgs {
+                profile: profile.clone(),
+                content: format!("limit test memory {i}"),
+                idempotency_key: format!("ll-{i}"),
+                event_time: None,
+                tags: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let out = tools::list::handle(
+        &h.pool,
+        ListArgs { profile, limit: Some(2), tags: None },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.memories.len(), 2, "limit=2 must return exactly 2");
+    assert!(out.total_in_profile >= 3, "total_in_profile must reflect all stored");
+}
+
+#[tokio::test]
+async fn search_with_tag_filter_returns_only_matching() {
+    let h = require_harness!("tag_filter");
+    let profile = h.profile.clone();
+
+    tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "Rust async runtime with tokio".into(),
+            idempotency_key: "tf-1".into(),
+            event_time: None,
+            tags: Some(vec!["rust".into()]),
+        },
+    )
+    .await
+    .unwrap();
+
+    tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "Python asyncio event loop".into(),
+            idempotency_key: "tf-2".into(),
+            event_time: None,
+            tags: Some(vec!["python".into()]),
+        },
+    )
+    .await
+    .unwrap();
+
+    let out = tools::search::handle(
+        &h.pool,
+        h.embedder.clone(),
+        false,
+        SearchArgs {
+            profile,
+            query: "async programming".into(),
+            k: None,
+            max_tokens: None,
+            tags: Some(vec!["rust".into()]),
+            min_similarity: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(!out.results.is_empty(), "should find the rust-tagged memory");
+    for hit in &out.results {
+        assert!(
+            hit.tags.contains(&"rust".to_string()),
+            "all results must have the 'rust' tag, got tags: {:?}",
+            hit.tags,
+        );
+    }
+}
+
+#[tokio::test]
+async fn search_with_min_similarity_filters_low_scores() {
+    let h = require_harness!("min_sim");
+    let profile = h.profile.clone();
+
+    tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile.clone(),
+            content: "Rust async concurrency with tokio and futures".into(),
+            idempotency_key: "ms-1".into(),
+            event_time: None,
+            tags: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let out = tools::search::handle(
+        &h.pool,
+        h.embedder.clone(),
+        false,
+        SearchArgs {
+            profile,
+            query: "French cooking recipes with butter and garlic".into(),
+            k: None,
+            max_tokens: None,
+            tags: None,
+            min_similarity: Some(0.8),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        out.results.len(),
+        0,
+        "unrelated query with high min_similarity should return 0 results"
+    );
+}
+
+#[tokio::test]
+async fn truncated_false_when_all_results_fit() {
+    let h = require_harness!("trunc_false");
+    let profile = h.profile.clone();
+
+    for i in 0..2 {
+        tools::store::handle(
+            &h.pool,
+            h.embedder.clone(),
+            StoreArgs {
+                profile: profile.clone(),
+                content: format!("truncation regression memory {i}"),
+                idempotency_key: format!("tr-{i}"),
+                event_time: None,
+                tags: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let out = tools::search::handle(
+        &h.pool,
+        h.embedder.clone(),
+        false,
+        SearchArgs {
+            profile,
+            query: "truncation regression".into(),
+            k: Some(10),
+            max_tokens: None,
+            tags: None,
+            min_similarity: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !out.truncated,
+        "truncated must be false when results.len() < k (Issue 10 regression)"
+    );
+    assert!(out.results.len() <= 2);
+}
+
+#[tokio::test]
+async fn get_memory_cross_profile_isolation() {
+    let h = require_harness!("xprofile");
+    let profile_a = h.profile.clone();
+    let profile_b = unique_profile("xprofile_b");
+
+    let stored = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: profile_a,
+            content: "cross-profile isolation test".into(),
+            idempotency_key: "xp-1".into(),
+            event_time: None,
+            tags: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Same UUID, different profile — must not find it.
+    let err = tools::get::handle(
+        &h.pool,
+        GetArgs { profile: profile_b, id: stored.id.to_string() },
+    )
+    .await
+    .unwrap_err();
+
+    match &err {
+        ChittaError::NotFound { .. } => {}
+        other => panic!("expected NotFound for wrong profile, got {other:?}"),
+    }
 }
 
 // Pull chrono::TimeZone into scope for the event_time test without polluting
