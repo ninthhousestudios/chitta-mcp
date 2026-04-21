@@ -18,6 +18,9 @@ pub struct Config {
     /// Number of independent ONNX sessions in the embedder pool.
     /// Each session loads the full BGE-M3 graph (~1-2 GB RAM). Default 1.
     pub embedder_pool_size: usize,
+    /// Whether to log search queries to `query_log` for retrieval research.
+    /// Parsed from `CHITTA_QUERY_LOG` env var. Default `true`.
+    pub query_log: bool,
 }
 
 impl Config {
@@ -57,6 +60,11 @@ impl Config {
             .unwrap_or(1)
             .max(1); // floor at 1 — zero sessions is nonsensical
 
+        // Default true; only "false" (case-insensitive) disables.
+        let query_log: bool = std::env::var("CHITTA_QUERY_LOG")
+            .map(|v| !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
+
         Ok(Self {
             database_url,
             model_path,
@@ -65,6 +73,7 @@ impl Config {
             db_acquire_timeout_secs,
             db_idle_timeout_secs,
             embedder_pool_size,
+            query_log,
         })
     }
 

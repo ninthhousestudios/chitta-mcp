@@ -238,3 +238,43 @@ pub(crate) async fn search_by_embedding(
     tx.commit().await?;
     Ok((hits, total))
 }
+
+/// Append-only insert into `query_log`. Fire-and-forget from the search
+/// handler — errors are logged but never propagated to the caller.
+pub async fn insert_query_log(
+    pool: &PgPool,
+    profile: &str,
+    query_text: &str,
+    embedding: &Vector,
+    k: i64,
+    min_similarity: f32,
+    tags: &[String],
+    result_ids: &[Uuid],
+    result_scores: &[f32],
+    total_available: Option<i64>,
+    truncated: bool,
+    latency_ms: i64,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO query_log
+            (profile, query_text, embedding, k, min_similarity, tags,
+             result_ids, result_scores, total_available, truncated, latency_ms)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        "#,
+    )
+    .bind(profile)
+    .bind(query_text)
+    .bind(embedding)
+    .bind(k as i32)
+    .bind(min_similarity)
+    .bind(tags)
+    .bind(result_ids)
+    .bind(result_scores)
+    .bind(total_available)
+    .bind(truncated)
+    .bind(latency_ms as i32)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
