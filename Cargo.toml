@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "syn
 
 # Official MCP SDK. Speaks JSON-RPC protocol + stdio transport; we supply handlers.
 # `schemars` feature exposes the JsonSchema-backed tool-input schema on the wire.
-rmcp = { version = "0.8", features = ["server", "transport-io", "macros", "schemars"] }
+rmcp = { version = "1", features = ["server", "transport-io", "macros", "schemars", "transport-streamable-http-server"] }
 
 # JSON schema generation for rmcp tool arguments (re-exported by rmcp).
 schemars = { version = "1", features = ["chrono04"] }
@@ -64,6 +64,13 @@ anyhow = "1"
 
 # CLI flag parsing. Needed now for --version; --http stub lands in v0.0.2.
 clap = { version = "4", features = ["derive"] }
+
+# HTTP transport stack for v0.0.2 (Issue 9). Not wired yet; deps land here
+# so the lockfile is stable before the transport module is written.
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["auth"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 # Full tokio for integration tests that spawn the binary and drive stdio.
