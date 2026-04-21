@@ -69,12 +69,15 @@ pub async fn handle(
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
 
-    // No fast-path replay check: the unique index on (profile,
-    // idempotency_key) is the source of truth, and `insert_or_fetch_memory`
-    // handles 23505 by returning the prior row. On the common cold-write
-    // path, a pre-flight SELECT costs a pointless round-trip; on replay we
-    // pay the embedding cost we would have paid anyway. Correctness lives
-    // in the constraint, not in the handler.
+    // Pre-flight SELECT: if the (profile, idempotency_key) pair already
+    // exists, return the prior row immediately — no embed, no insert.
+    // The unique constraint on (profile, idempotency_key) remains the
+    // authoritative guard for TOCTOU races on the cold-write path.
+    if let Some(existing) =
+        db::find_by_idempotency_key(pool, &args.profile, &args.idempotency_key).await?
+    {
+        return Ok(row_to_output(existing, true));
+    }
 
     // Embedding is CPU-bound; hand it to spawn_blocking so we do not block
     // the tokio worker for multi-millisecond stretches. We move `content`
