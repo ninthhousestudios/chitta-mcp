@@ -259,7 +259,7 @@ const HNSW_EF_SEARCH_MAX: i64 = 1000;
 ///
 /// Runs inside a short transaction so `SET LOCAL hnsw.ef_search` scopes to
 /// the ANN query only and doesn't leak to other pool users.
-pub(crate) async fn search_by_embedding(
+pub async fn search_by_embedding(
     pool: &PgPool,
     profile: &str,
     query: &Vector,
@@ -325,6 +325,48 @@ pub(crate) async fn search_by_embedding(
 
     tx.commit().await?;
     Ok((hits, total))
+}
+
+/// One row from the `query_log` table. Used by the replay subcommand.
+#[derive(Debug, Clone, FromRow)]
+pub struct QueryLogEntry {
+    pub id: i64,
+    pub profile: String,
+    pub query_text: String,
+    pub embedding: Vector,
+    pub k: i32,
+    pub min_similarity: f32,
+    pub tags: Vec<String>,
+    pub result_ids: Vec<Uuid>,
+    pub result_scores: Vec<f32>,
+    pub total_available: Option<i64>,
+    pub truncated: bool,
+    pub latency_ms: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Read query_log entries, optionally filtered by profile, ordered by
+/// `created_at DESC` (most recent first), limited to `limit` rows.
+pub async fn read_query_log(
+    pool: &PgPool,
+    profile: Option<&str>,
+    limit: i64,
+) -> Result<Vec<QueryLogEntry>> {
+    let rows = sqlx::query_as::<_, QueryLogEntry>(
+        r#"
+        SELECT id, profile, query_text, embedding, k, min_similarity, tags,
+               result_ids, result_scores, total_available, truncated, latency_ms, created_at
+        FROM query_log
+        WHERE ($1::text IS NULL OR profile = $1)
+        ORDER BY created_at DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(profile)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 /// Append-only insert into `query_log`. Fire-and-forget from the search
