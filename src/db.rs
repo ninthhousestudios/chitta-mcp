@@ -171,7 +171,7 @@ const HNSW_EF_SEARCH_MAX: i64 = 1000;
 ///
 /// Runs inside a short transaction so `SET LOCAL hnsw.ef_search` scopes to
 /// the ANN query only and doesn't leak to other pool users.
-pub async fn search_by_embedding(
+pub(crate) async fn search_by_embedding(
     pool: &PgPool,
     profile: &str,
     query: &Vector,
@@ -179,9 +179,17 @@ pub async fn search_by_embedding(
     tags: &[String],
     min_similarity: f32,
 ) -> Result<(Vec<SearchHit>, i64)> {
+    // ef_search is an integer GUC; SET LOCAL does not accept bind params,
+    // so we clamp to a known-safe integer range and format inline. k is
+    // already range-checked by the validator; the clamp below is belt +
+    // suspenders against a future caller reaching this fn with a bad k.
+    let ef_search = (k.max(1) * 4).clamp(HNSW_EF_SEARCH_MIN, HNSW_EF_SEARCH_MAX);
+    let mut tx = pool.begin().await?;
+
     // Cheap pre-count under the same filters we expose to the caller.
-    // No distance term here — it's a sequential filter count, bounded by
-    // the size of the profile.
+    // Runs inside the transaction so the count and ANN query see the same
+    // MVCC snapshot. No distance term here — it's a sequential filter
+    // count, bounded by the size of the profile.
     let total: i64 = sqlx::query_scalar(
         r#"
         select count(*)::bigint
@@ -192,15 +200,9 @@ pub async fn search_by_embedding(
     )
     .bind(profile)
     .bind(tags)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    // ef_search is an integer GUC; SET LOCAL does not accept bind params,
-    // so we clamp to a known-safe integer range and format inline. k is
-    // already range-checked by the validator; the clamp below is belt +
-    // suspenders against a future caller reaching this fn with a bad k.
-    let ef_search = (k.max(1) * 4).clamp(HNSW_EF_SEARCH_MIN, HNSW_EF_SEARCH_MAX);
-    let mut tx = pool.begin().await?;
     sqlx::query(&format!("set local hnsw.ef_search = {ef_search}"))
         .execute(&mut *tx)
         .await?;
