@@ -69,8 +69,10 @@ pub type SearchOutput = Envelope<SearchHit>;
 pub async fn handle(
     pool: &PgPool,
     embedder: Arc<Embedder>,
+    query_log_enabled: bool,
     args: SearchArgs,
 ) -> Result<SearchOutput> {
+    let search_start = std::time::Instant::now();
     // Destructure up front so we can move `query` into spawn_blocking
     // without cloning and still use the other fields afterward.
     let SearchArgs { profile, query, k, max_tokens, tags, min_similarity } = args;
@@ -132,6 +134,41 @@ pub async fn handle(
     // magic-constant overhead and matches what the wire will carry.
     let mut envelope = Envelope::new(results, truncated, Some(total_available_u64), 0);
     envelope.budget_spent_tokens = estimate_tokens(&envelope);
+
+    // Fire-and-forget query log for retrieval research.
+    if query_log_enabled {
+        let latency_ms = search_start.elapsed().as_millis() as i64;
+        let result_ids: Vec<Uuid> = envelope.results.iter().map(|h| h.id).collect();
+        let result_scores: Vec<f32> = envelope.results.iter().map(|h| h.similarity).collect();
+        let log_pool = pool.clone();
+        let log_profile = profile.clone();
+        let log_query = query.clone();
+        let log_embedding = query_vec.clone();
+        let log_tags = tags.clone();
+        let log_total = Some(total_available);
+        let log_truncated = envelope.truncated;
+        tokio::spawn(async move {
+            if let Err(e) = db::insert_query_log(
+                &log_pool,
+                &log_profile,
+                &log_query,
+                &log_embedding,
+                k,
+                min_similarity,
+                &log_tags,
+                &result_ids,
+                &result_scores,
+                log_total,
+                log_truncated,
+                latency_ms,
+            )
+            .await
+            {
+                tracing::warn!("query log insert failed: {e}");
+            }
+        });
+    }
+
     Ok(envelope)
 }
 

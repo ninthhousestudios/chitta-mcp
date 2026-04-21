@@ -24,12 +24,13 @@ use crate::tools;
 pub struct ChittaServer {
     pool: PgPool,
     embedder: Arc<Embedder>,
+    query_log_enabled: bool,
     tool_router: ToolRouter<Self>,
 }
 
 impl ChittaServer {
-    pub fn new(pool: PgPool, embedder: Arc<Embedder>) -> Self {
-        Self { pool, embedder, tool_router: Self::tool_router() }
+    pub fn new(pool: PgPool, embedder: Arc<Embedder>, query_log_enabled: bool) -> Self {
+        Self { pool, embedder, query_log_enabled, tool_router: Self::tool_router() }
     }
 }
 
@@ -74,9 +75,14 @@ impl ChittaServer {
         &self,
         Parameters(args): Parameters<tools::SearchArgs>,
     ) -> Result<String, ErrorData> {
-        let out = tools::search::handle(&self.pool, self.embedder.clone(), args)
-            .await
-            .map_err(chitta_to_rmcp)?;
+        let out = tools::search::handle(
+            &self.pool,
+            self.embedder.clone(),
+            self.query_log_enabled,
+            args,
+        )
+        .await
+        .map_err(chitta_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 }

@@ -50,6 +50,19 @@ async fn main() -> Result<()> {
     let pool = db::connect(&cfg).await.context("connecting to database")?;
     db::run_migrations(&pool).await.context("running migrations")?;
 
+    let query_log_enabled = cfg.query_log
+        && sqlx::query("SELECT 1 FROM query_log LIMIT 0")
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                tracing::warn!("query_log table missing — search logging disabled: {e}");
+                e
+            })
+            .is_ok();
+    if query_log_enabled {
+        tracing::info!("query_log enabled");
+    }
+
     let embedder = Embedder::load(
         &cfg.model_file(),
         &cfg.tokenizer_file(),
@@ -57,7 +70,7 @@ async fn main() -> Result<()> {
     )
     .context("loading embedding model")?;
 
-    let server = ChittaServer::new(pool, Arc::clone(&embedder));
+    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled);
     let (stdin, stdout) = stdio();
 
     let service = server
