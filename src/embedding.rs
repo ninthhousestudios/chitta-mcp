@@ -60,7 +60,7 @@ impl Embedder {
     pub fn load(model_path: &Path, tokenizer_path: &Path) -> Result<Arc<Self>> {
         tracing::info!(model = ?model_path, tokenizer = ?tokenizer_path, "loading BGE-M3");
 
-        let tokenizer =
+        let mut tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| ChittaError::Embedding {
                 tool: "startup",
                 message: format!("failed to load tokenizer at {tokenizer_path:?}: {e}"),
@@ -68,6 +68,16 @@ impl Embedder {
                     "Ensure CHITTA_MODEL_PATH contains a valid HuggingFace tokenizer.json."
                         .to_string(),
             })?;
+
+        if let Some(trunc) = tokenizer.get_truncation() {
+            tracing::warn!(
+                max_length = trunc.max_length,
+                "tokenizer.json has truncation enabled — disabling to preserve MAX_TOKENS guard"
+            );
+            tokenizer
+                .with_truncation(None)
+                .expect("disabling truncation should not fail");
+        }
 
         let session = Session::builder()
             .map_err(embedding_startup_err)?
