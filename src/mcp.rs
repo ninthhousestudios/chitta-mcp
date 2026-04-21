@@ -84,17 +84,14 @@ impl ChittaServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ChittaServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "chitta-rs v0.0.1 — agent-native persistent memory. \
-                 Three tools: store_memory, get_memory, search_memories. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
+                "chitta-rs v0.0.2 — agent-native persistent memory. \
+                 Six tools: store_memory, get_memory, search_memories, \
+                 update_memory, delete_memory, list_recent_memories. \
                  Profiles isolate namespaces; idempotency_key dedupes writes; \
-                 bi-temporal (event_time + record_time); verbatim storage."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+                 bi-temporal (event_time + record_time); verbatim storage.",
+            )
     }
 }
 
