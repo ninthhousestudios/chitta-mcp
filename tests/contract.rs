@@ -82,12 +82,14 @@ fn store_output_wire_keys() {
         event_time: t,
         record_time: t,
         tags: vec![],
+        source: Some("test".into()),
+        metadata: Some(json!({"k": "v"})),
         idempotent_replay: false,
     };
     let v = serde_json::to_value(&out).unwrap();
     assert_keys(
         &v,
-        &["id", "profile", "content", "event_time", "record_time", "tags", "idempotent_replay"],
+        &["id", "profile", "content", "event_time", "record_time", "tags", "source", "metadata", "idempotent_replay"],
     );
     assert_eq!(v["idempotent_replay"], json!(false));
 }
@@ -102,6 +104,8 @@ fn get_output_wire_keys() {
         event_time: t,
         record_time: t,
         tags: vec!["x".into()],
+        source: None,
+        metadata: None,
     };
     let v = serde_json::to_value(&out).unwrap();
     assert_keys(&v, &["id", "profile", "content", "event_time", "record_time", "tags"]);
@@ -117,6 +121,7 @@ fn search_output_envelope_shape() {
         event_time: t,
         record_time: t,
         tags: vec![],
+        source: None,
     };
     let env: SearchOutput = Envelope::new(vec![hit], false, Some(1), 42);
     let v = serde_json::to_value(&env).unwrap();
@@ -340,6 +345,8 @@ fn update_output_wire_keys() {
         event_time: t,
         record_time: t,
         tags: vec!["t".into()],
+        source: None,
+        metadata: None,
         re_embedded: true,
     };
     let v = serde_json::to_value(&out).unwrap();
@@ -398,6 +405,7 @@ fn list_output_wire_keys() {
         event_time: t,
         record_time: t,
         tags: vec!["t".into()],
+        source: None,
     };
     let out = ListOutput {
         memories: vec![item],

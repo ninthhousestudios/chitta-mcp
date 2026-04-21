@@ -180,6 +180,8 @@ async fn idempotent_replay_returns_same_row() {
         idempotency_key: "k-1".into(),
         event_time: None,
         tags: None,
+        source: None,
+        metadata: None,
     };
 
     let first = tools::store::handle(&h.pool, h.embedder.clone(), args()).await.unwrap();
@@ -220,6 +222,8 @@ async fn verbatim_roundtrip_preserves_unicode_and_whitespace() {
             idempotency_key: "v-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -278,6 +282,8 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
                 idempotency_key: format!("b-{i}"),
                 event_time: None,
                 tags: None,
+                source: None,
+                metadata: None,
             },
         )
         .await
@@ -322,6 +328,8 @@ async fn error_contract_invalid_event_time_populates_next_action() {
             idempotency_key: "e-1".into(),
             event_time: Some(chrono::Utc.with_ymd_and_hms(1969, 6, 20, 0, 0, 0).single().unwrap()),
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -371,6 +379,8 @@ async fn search_snippet_is_verbatim_prefix() {
             idempotency_key: "s-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -413,6 +423,8 @@ async fn profile_isolation_keeps_searches_scoped() {
             idempotency_key: "a-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -453,6 +465,8 @@ async fn content_too_long_rejected_with_token_count() {
             idempotency_key: "l-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -479,6 +493,8 @@ async fn concurrent_duplicate_writes_converge_on_one_row() {
         idempotency_key: "c-1".into(),
         event_time: None,
         tags: None,
+        source: None,
+        metadata: None,
     };
 
     let (a, b) = tokio::join!(
@@ -519,6 +535,8 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
             idempotency_key: "sem-1".into(),
             event_time: None,
             tags: Some(vec!["db".into(), "perf".into()]),
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -563,6 +581,8 @@ async fn update_memory_content_reembeds() {
             idempotency_key: "uc-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -576,6 +596,8 @@ async fn update_memory_content_reembeds() {
             id: stored.id.to_string(),
             content: Some("completely new content about cooking".into()),
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -607,6 +629,8 @@ async fn update_memory_tags_only_no_reembed() {
             idempotency_key: "ut-1".into(),
             event_time: None,
             tags: Some(vec!["old".into()]),
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -620,6 +644,8 @@ async fn update_memory_tags_only_no_reembed() {
             id: stored.id.to_string(),
             content: None,
             tags: Some(vec!["new-tag".into(), "another".into()]),
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -643,6 +669,8 @@ async fn update_memory_not_found() {
             id: Uuid::now_v7().to_string(),
             content: Some("anything".into()),
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -666,6 +694,8 @@ async fn update_memory_requires_at_least_one_field() {
             id: Uuid::now_v7().to_string(),
             content: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -696,6 +726,8 @@ async fn delete_memory_removes_row() {
             idempotency_key: "d-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -757,6 +789,8 @@ async fn list_recent_returns_time_ordered() {
                 idempotency_key: format!("lo-{i}"),
                 event_time: None,
                 tags: None,
+                source: None,
+                metadata: None,
             },
         )
         .await
@@ -797,6 +831,8 @@ async fn list_recent_respects_limit() {
                 idempotency_key: format!("ll-{i}"),
                 event_time: None,
                 tags: None,
+                source: None,
+                metadata: None,
             },
         )
         .await
@@ -828,6 +864,8 @@ async fn search_with_tag_filter_returns_only_matching() {
             idempotency_key: "tf-1".into(),
             event_time: None,
             tags: Some(vec!["rust".into()]),
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -842,6 +880,8 @@ async fn search_with_tag_filter_returns_only_matching() {
             idempotency_key: "tf-2".into(),
             event_time: None,
             tags: Some(vec!["python".into()]),
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -887,6 +927,8 @@ async fn search_with_min_similarity_filters_low_scores() {
             idempotency_key: "ms-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await
@@ -930,6 +972,8 @@ async fn truncated_false_when_all_results_fit() {
                 idempotency_key: format!("tr-{i}"),
                 event_time: None,
                 tags: None,
+                source: None,
+                metadata: None,
             },
         )
         .await
@@ -974,6 +1018,8 @@ async fn get_memory_cross_profile_isolation() {
             idempotency_key: "xp-1".into(),
             event_time: None,
             tags: None,
+            source: None,
+            metadata: None,
         },
     )
     .await

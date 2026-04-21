@@ -24,6 +24,8 @@ pub struct MemoryRow {
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
     pub idempotency_key: String,
+    pub source: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// One hit from an ANN search. Similarity is `1 - cosine_distance`.
@@ -34,6 +36,7 @@ pub struct SearchHit {
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
+    pub source: Option<String>,
     pub similarity: f32,
 }
 
@@ -67,9 +70,9 @@ pub async fn insert_or_fetch_memory(
     let insert_result = sqlx::query_as::<_, MemoryRow>(
         r#"
         insert into memories
-            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
-        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         "#,
     )
     .bind(new.id)
@@ -80,6 +83,8 @@ pub async fn insert_or_fetch_memory(
     .bind(new.record_time)
     .bind(&new.tags)
     .bind(&new.idempotency_key)
+    .bind(&new.source)
+    .bind(&new.metadata)
     .fetch_one(pool)
     .await;
 
@@ -117,7 +122,7 @@ pub async fn find_by_idempotency_key(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         from memories
         where profile = $1 and idempotency_key = $2
         "#,
@@ -136,7 +141,7 @@ pub async fn get_memory_by_id(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         from memories
         where profile = $1 and id = $2
         "#,
@@ -161,15 +166,19 @@ pub async fn update_memory(
     content: Option<&str>,
     embedding: Option<&Vector>,
     tags: Option<&[String]>,
+    source: Option<&str>,
+    metadata: Option<&serde_json::Value>,
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
         UPDATE memories
         SET content   = COALESCE($3, content),
             embedding = COALESCE($4, embedding),
-            tags      = COALESCE($5, tags)
+            tags      = COALESCE($5, tags),
+            source    = COALESCE($6, source),
+            metadata  = COALESCE($7, metadata)
         WHERE profile = $1 AND id = $2
-        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         "#,
     )
     .bind(profile)
@@ -177,6 +186,8 @@ pub async fn update_memory(
     .bind(content)
     .bind(embedding)
     .bind(tags)
+    .bind(source)
+    .bind(metadata)
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -207,7 +218,7 @@ pub async fn list_recent(
 ) -> Result<Vec<MemoryRow>> {
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
@@ -247,7 +258,7 @@ pub async fn list_recent_with_count(
 
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
@@ -344,6 +355,7 @@ pub async fn search_by_embedding(
             event_time,
             record_time,
             tags,
+            source,
             (1.0 - (embedding <=> $2))::real as similarity
         from memories
         where profile = $1

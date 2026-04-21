@@ -37,6 +37,12 @@ pub struct StoreArgs {
     /// Optional tags. Up to 32, each 1-64 chars.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// Provenance: which client stored this (e.g. "claude-code", "cursor").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Arbitrary structured data alongside the memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +53,10 @@ pub struct StoreOutput {
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub idempotent_replay: bool,
 }
 
@@ -97,6 +107,8 @@ pub async fn handle(
         record_time: now,
         tags,
         idempotency_key: args.idempotency_key,
+        source: args.source,
+        metadata: args.metadata,
     };
 
     let (stored, replayed) = db::insert_or_fetch_memory(pool, &row).await?;
@@ -111,6 +123,8 @@ fn row_to_output(row: MemoryRow, replayed: bool) -> StoreOutput {
         event_time: row.event_time,
         record_time: row.record_time,
         tags: row.tags,
+        source: row.source,
+        metadata: row.metadata,
         idempotent_replay: replayed,
     }
 }

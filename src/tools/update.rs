@@ -33,6 +33,12 @@ pub struct UpdateArgs {
     /// New tags. Replaces the existing tag list entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// New source provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// New metadata. Replaces existing metadata entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +49,10 @@ pub struct UpdateOutput {
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub re_embedded: bool,
 }
 
@@ -59,11 +69,11 @@ pub async fn handle(
     validate::profile(TOOL, &args.profile)?;
     let id = validate::parse_uuid(TOOL, "id", &args.id)?;
 
-    if args.content.is_none() && args.tags.is_none() {
+    if args.content.is_none() && args.tags.is_none() && args.source.is_none() && args.metadata.is_none() {
         return Err(ChittaError::InvalidArgument {
             tool: TOOL,
             argument: "content/tags".to_string(),
-            constraint: "at least one of content or tags must be provided".to_string(),
+            constraint: "at least one of content, tags, source, or metadata must be provided".to_string(),
             received: None,
             next_action: "Provide content and/or tags to update.".to_string(),
         });
@@ -92,6 +102,8 @@ pub async fn handle(
         args.content.as_deref(),
         embedding.as_ref(),
         args.tags.as_deref(),
+        args.source.as_deref(),
+        args.metadata.as_ref(),
     )
     .await?
     .ok_or_else(|| ChittaError::NotFound {
@@ -109,6 +121,8 @@ pub async fn handle(
         event_time: row.event_time,
         record_time: row.record_time,
         tags: row.tags,
+        source: row.source,
+        metadata: row.metadata,
         re_embedded,
     })
 }

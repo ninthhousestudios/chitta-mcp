@@ -33,6 +33,10 @@ pub struct GetOutput {
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[tracing::instrument(
@@ -61,5 +65,7 @@ pub async fn handle(pool: &PgPool, args: GetArgs) -> Result<GetOutput> {
         event_time: row.event_time,
         record_time: row.record_time,
         tags: row.tags,
+        source: row.source,
+        metadata: row.metadata,
     })
 }

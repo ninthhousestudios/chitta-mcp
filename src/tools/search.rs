@@ -57,6 +57,8 @@ pub struct SearchHit {
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 pub type SearchOutput = Envelope<SearchHit>;
@@ -116,6 +118,7 @@ pub async fn handle(
             event_time: hit.event_time,
             record_time: hit.record_time,
             tags: hit.tags,
+            source: hit.source,
         })
         .collect();
 
@@ -250,6 +253,7 @@ mod tests {
             event_time: t,
             record_time: t,
             tags: vec![],
+            source: None,
         }
     }
 
