@@ -28,6 +28,31 @@ pub fn profile(tool: &'static str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// 4 MB byte-length cap — cheap O(1) defense-in-depth before tokenization.
+pub const MAX_CONTENT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Content byte length: at most 4 MB (`MAX_CONTENT_BYTES`).
+///
+/// This is a cheap pre-tokenization gate. The token-length bound is enforced
+/// separately inside `embed`.
+pub fn content_byte_length(tool: &'static str, value: &str) -> Result<()> {
+    if value.len() > MAX_CONTENT_BYTES {
+        return Err(ChittaError::InvalidArgument {
+            tool,
+            argument: "content".to_string(),
+            constraint: format!("content must be at most {} bytes", MAX_CONTENT_BYTES),
+            received: Some(json!(value.len())),
+            next_action: format!(
+                "Reduce content size. Current: {} bytes, limit: {} bytes. \
+                 Split into multiple memories if needed.",
+                value.len(),
+                MAX_CONTENT_BYTES
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Content: non-empty. Token-length bound is enforced inside `embed`.
 pub fn content_non_empty(tool: &'static str, value: &str) -> Result<()> {
     if value.is_empty() {
@@ -248,5 +273,37 @@ mod tests {
         assert!(tags("t", &too_many).is_err());
         assert!(tags("t", &["".to_string()]).is_err());
         assert!(tags("t", &["x".repeat(65)]).is_err());
+    }
+
+    #[test]
+    fn content_byte_length_accepts_normal_input() {
+        let normal = "hello world";
+        let result = content_byte_length("test_tool", normal);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn content_byte_length_rejects_huge_input() {
+        let huge = "x".repeat(5 * 1024 * 1024); // 5 MB
+        let result = content_byte_length("test_tool", &huge);
+        assert!(result.is_err());
+        // Confirm the error message surfaces the actual byte count.
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("content"),
+            "error message should mention the argument: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn content_byte_length_accepts_exactly_at_limit() {
+        let at_limit = "x".repeat(MAX_CONTENT_BYTES);
+        assert!(content_byte_length("test_tool", &at_limit).is_ok());
+    }
+
+    #[test]
+    fn content_byte_length_rejects_one_byte_over_limit() {
+        let over = "x".repeat(MAX_CONTENT_BYTES + 1);
+        assert!(content_byte_length("test_tool", &over).is_err());
     }
 }
