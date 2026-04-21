@@ -286,9 +286,32 @@ async fn serve_http(
         config,
     );
 
+    // rmcp requires Accept to contain both application/json and text/event-stream,
+    // but some clients (e.g. Claude Code) omit it. Normalize before rmcp sees it.
+    let normalize_accept = axum::middleware::from_fn(
+        |mut req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| async move {
+            use axum::http::header::ACCEPT;
+            let dominated = req
+                .headers()
+                .get(ACCEPT)
+                .and_then(|v| v.to_str().ok())
+                .is_none_or(|v| {
+                    !v.contains("application/json") || !v.contains("text/event-stream")
+                });
+            if dominated {
+                req.headers_mut().insert(
+                    ACCEPT,
+                    "application/json, text/event-stream".parse().unwrap(),
+                );
+            }
+            next.run(req).await
+        },
+    );
+
     #[allow(deprecated)]
     let app = axum::Router::new()
         .route("/mcp", any_service(mcp_service))
+        .layer(normalize_accept)
         .layer(ValidateRequestHeaderLayer::bearer(&bearer_token));
 
     let addr = format!("{http_addr}:{http_port}");
