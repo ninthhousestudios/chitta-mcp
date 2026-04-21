@@ -82,7 +82,14 @@ async fn try_shared() -> Option<SharedSetup> {
             p
         });
 
-    let cfg = Config { database_url: database_url.clone(), model_path, log_level: "warn".into() };
+    let cfg = Config {
+        database_url: database_url.clone(),
+        model_path,
+        log_level: "warn".into(),
+        db_max_connections: 8,
+        db_acquire_timeout_secs: 5,
+        db_idle_timeout_secs: 600,
+    };
 
     if !cfg.model_file().is_file() || !cfg.tokenizer_file().is_file() {
         eprintln!("SKIPPED: model or tokenizer missing at {:?}", cfg.model_path);
@@ -121,6 +128,9 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
         database_url: s.database_url,
         model_path: PathBuf::new(), // unused past embedder load
         log_level: "warn".into(),
+        db_max_connections: 8,
+        db_acquire_timeout_secs: 5,
+        db_idle_timeout_secs: 600,
     };
     let pool = match db::connect(&cfg).await {
         Ok(p) => p,

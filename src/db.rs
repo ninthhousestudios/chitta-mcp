@@ -39,7 +39,9 @@ pub struct SearchHit {
 
 pub async fn connect(cfg: &Config) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
-        .max_connections(8)
+        .max_connections(cfg.db_max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(cfg.db_acquire_timeout_secs))
+        .idle_timeout(std::time::Duration::from_secs(cfg.db_idle_timeout_secs))
         .connect(&cfg.database_url)
         .await?;
     Ok(pool)

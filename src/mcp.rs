@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ErrorData, Json, ServerHandler,
+    ErrorData, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
@@ -48,12 +48,11 @@ impl ChittaServer {
     pub async fn store_memory(
         &self,
         Parameters(args): Parameters<tools::StoreArgs>,
-    ) -> Result<Json<serde_json::Value>, ErrorData> {
+    ) -> Result<String, ErrorData> {
         let out = tools::store::handle(&self.pool, self.embedder.clone(), args)
             .await
             .map_err(chitta_to_rmcp)?;
-        let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;
-        Ok(Json(v))
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 
     /// Fetch a memory by id.
@@ -62,10 +61,9 @@ impl ChittaServer {
     pub async fn get_memory(
         &self,
         Parameters(args): Parameters<tools::GetArgs>,
-    ) -> Result<Json<serde_json::Value>, ErrorData> {
+    ) -> Result<String, ErrorData> {
         let out = tools::get::handle(&self.pool, args).await.map_err(chitta_to_rmcp)?;
-        let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;
-        Ok(Json(v))
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 
     /// Semantic similarity search. Returns envelope with snippets.
@@ -75,12 +73,11 @@ impl ChittaServer {
     pub async fn search_memories(
         &self,
         Parameters(args): Parameters<tools::SearchArgs>,
-    ) -> Result<Json<serde_json::Value>, ErrorData> {
+    ) -> Result<String, ErrorData> {
         let out = tools::search::handle(&self.pool, self.embedder.clone(), args)
             .await
             .map_err(chitta_to_rmcp)?;
-        let v = serde_json::to_value(&out).map_err(json_to_rmcp)?;
-        Ok(Json(v))
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 }
 
@@ -120,7 +117,7 @@ pub fn chitta_to_rmcp(e: ChittaError) -> ErrorData {
     }
 }
 
-fn json_to_rmcp(e: serde_json::Error) -> ErrorData {
+pub fn json_to_rmcp(e: serde_json::Error) -> ErrorData {
     ErrorData::internal_error(
         format!("failed to serialize response: {e}"),
         Some(serde_json::json!({

@@ -83,7 +83,7 @@ pub async fn handle(
     let embedder_clone = embedder.clone();
     let content_owned = args.content;
     let (content, embedding_vec) = tokio::task::spawn_blocking(move || {
-        let emb = embedder_clone.embed(&content_owned);
+        let emb = embedder_clone.embed(&content_owned, "store_memory");
         (content_owned, emb)
     })
     .await

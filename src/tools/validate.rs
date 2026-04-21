@@ -103,12 +103,13 @@ pub fn tags(tool: &'static str, values: &[String]) -> Result<()> {
         });
     }
     for (i, t) in values.iter().enumerate() {
-        if t.is_empty() || t.len() > 64 {
+        let char_count = t.chars().count();
+        if char_count == 0 || char_count > 64 {
             return Err(ChittaError::InvalidArgument {
                 tool,
                 argument: "tags".to_string(),
                 constraint: "each tag 1-64 chars".to_string(),
-                received: Some(json!({ "index": i, "length": t.len() })),
+                received: Some(json!({ "index": i, "length": char_count })),
                 next_action: "Ensure every tag is between 1 and 64 characters.".to_string(),
             });
         }

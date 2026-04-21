@@ -99,7 +99,7 @@ pub async fn handle(
     // Embedding off the async worker. `query` is moved into the closure —
     // no clone.
     let embedder_clone = embedder.clone();
-    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&query))
+    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&query, "search_memories"))
         .await
         .map_err(|e| ChittaError::Internal(format!("spawn_blocking failed: {e}")))??;
 
@@ -131,7 +131,7 @@ pub async fn handle(
     // Build the envelope, then overwrite `budget_spent_tokens` with the
     // estimator applied to the fully-assembled payload. This avoids a
     // magic-constant overhead and matches what the wire will carry.
-    let mut envelope = Envelope::new(results, truncated, Some(total_available as u64), 0);
+    let mut envelope = Envelope::new(results, truncated, Some(u64::try_from(total_available).unwrap_or(0)), 0);
     envelope.budget_spent_tokens = estimate_tokens(&envelope);
     Ok(envelope)
 }

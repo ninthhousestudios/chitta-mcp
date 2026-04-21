@@ -86,12 +86,12 @@ impl Embedder {
         Ok(Arc::new(Self { tokenizer, session: Mutex::new(session) }))
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed(&self, text: &str, tool: &'static str) -> Result<Vec<f32>> {
         let encoding = self
             .tokenizer
             .encode(text, true)
             .map_err(|e| ChittaError::Embedding {
-                tool: "store_memory",
+                tool,
                 message: format!("tokenizer error: {e}"),
                 next_action:
                     "Tokenizer failed to encode the input. Verify CHITTA_MODEL_PATH contains the \
@@ -104,7 +104,7 @@ impl Embedder {
 
         if ids.len() > MAX_TOKENS {
             return Err(ChittaError::ContentTooLong {
-                tool: "store_memory",
+                tool,
                 token_count: ids.len(),
             });
         }
@@ -121,9 +121,10 @@ impl Embedder {
                 ChittaError::Internal(format!("failed to build attention_mask tensor: {e}"))
             })?;
 
-        let input_ids_value = Value::from_array(input_ids_arr).map_err(ort_to_embed_err)?;
+        let input_ids_value =
+            Value::from_array(input_ids_arr).map_err(|e| ort_to_embed_err(e, tool))?;
         let attention_mask_value =
-            Value::from_array(attention_mask_arr).map_err(ort_to_embed_err)?;
+            Value::from_array(attention_mask_arr).map_err(|e| ort_to_embed_err(e, tool))?;
 
         let mut session = self
             .session
@@ -134,24 +135,25 @@ impl Embedder {
                 "input_ids" => input_ids_value,
                 "attention_mask" => attention_mask_value,
             ])
-            .map_err(ort_to_embed_err)?;
+            .map_err(|e| ort_to_embed_err(e, tool))?;
 
         let dense = outputs
             .get("dense_embeddings")
             .ok_or_else(|| ChittaError::Embedding {
-                tool: "store_memory",
+                tool,
                 message: "ONNX session produced no `dense_embeddings` output".to_string(),
                 next_action: "Report this as a bug; include server logs.".to_string(),
             })?;
 
-        let (shape, data) = dense.try_extract_tensor::<f32>().map_err(ort_to_embed_err)?;
+        let (shape, data) =
+            dense.try_extract_tensor::<f32>().map_err(|e| ort_to_embed_err(e, tool))?;
 
         // Expected shape is [1, 1024]; accept either [1, 1024] or [1024]
         // to stay robust against minor export differences.
         let total: usize = shape.iter().map(|&d| d as usize).product();
         if total != EMBEDDING_DIM {
             return Err(ChittaError::Embedding {
-                tool: "store_memory",
+                tool,
                 message: format!(
                     "unexpected embedding shape {shape:?}; expected {EMBEDDING_DIM} elements"
                 ),
@@ -174,9 +176,9 @@ fn embedding_startup_err(e: ort::Error) -> ChittaError {
     }
 }
 
-fn ort_to_embed_err(e: ort::Error) -> ChittaError {
+fn ort_to_embed_err(e: ort::Error, tool: &'static str) -> ChittaError {
     ChittaError::Embedding {
-        tool: "store_memory",
+        tool,
         message: format!("ONNX runtime error: {e}"),
         next_action: "Report this as a bug; include server logs.".to_string(),
     }

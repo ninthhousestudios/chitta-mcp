@@ -396,7 +396,14 @@ v0.0.1 is **stdio only**. The binary reads MCP requests from stdin and writes re
 chitta-rs                    # stdio, default
 ```
 
-HTTP transport (with bearer-token auth) lands in v0.0.2. Same binary, `--http --bind … --auth-token-file …` flag.
+HTTP transport lands in v0.0.2. Same binary, `--http --bind … --auth-token-file …` flag.
+
+v0.0.2 transport notes:
+- Use **Streamable HTTP** (MCP 2025-11-05 spec), not SSE. SSE is deprecated in Claude Code.
+- rmcp 0.8 supports streamable HTTP via `StreamableHttpServerConfig`.
+- Claude Code config: `{ "type": "http", "url": "http://localhost:PORT/mcp" }`.
+- Key win: one persistent process serves multiple Claude Code sessions — single embedding model in memory, single connection pool. Eliminates the per-session stdio duplication.
+- Bearer-token auth for remote access.
 
 ---
 
