@@ -148,6 +148,94 @@ pub async fn get_memory_by_id(
     Ok(row)
 }
 
+/// Update a memory's content and/or tags. Uses COALESCE so only provided
+/// fields are overwritten. When content changes, the caller must supply a new
+/// embedding. `record_time` is never touched (bi-temporal invariant).
+///
+/// Returns the updated row, or `None` if the `(profile, id)` pair does not
+/// exist (caller turns that into `NotFound`).
+pub async fn update_memory(
+    pool: &PgPool,
+    profile: &str,
+    id: Uuid,
+    content: Option<&str>,
+    embedding: Option<&Vector>,
+    tags: Option<&[String]>,
+) -> Result<MemoryRow> {
+    let row = sqlx::query_as::<_, MemoryRow>(
+        r#"
+        UPDATE memories
+        SET content   = COALESCE($3, content),
+            embedding = COALESCE($4, embedding),
+            tags      = COALESCE($5, tags)
+        WHERE profile = $1 AND id = $2
+        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        "#,
+    )
+    .bind(profile)
+    .bind(id)
+    .bind(content)
+    .bind(embedding)
+    .bind(tags)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Hard-delete a memory by profile + id. Returns `true` if a row was deleted.
+pub async fn delete_memory(pool: &PgPool, profile: &str, id: Uuid) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM memories
+        WHERE profile = $1 AND id = $2
+        "#,
+    )
+    .bind(profile)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// List recent memories ordered by `record_time DESC`. When `tags` is
+/// non-empty, only rows sharing at least one tag are returned (OR match).
+pub async fn list_recent(
+    pool: &PgPool,
+    profile: &str,
+    limit: i64,
+    tags: &[String],
+) -> Result<Vec<MemoryRow>> {
+    let rows = sqlx::query_as::<_, MemoryRow>(
+        r#"
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        FROM memories
+        WHERE profile = $1
+          AND ($3::text[] = '{}' OR tags && $3)
+        ORDER BY record_time DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(profile)
+    .bind(limit)
+    .bind(tags)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Count all memories in a profile (regardless of tags).
+pub async fn count_profile(pool: &PgPool, profile: &str) -> Result<i64> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*)::bigint FROM memories WHERE profile = $1
+        "#,
+    )
+    .bind(profile)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 /// Minimum `hnsw.ef_search` used for every semantic query. pgvector's
 /// default is 40, which both caps HNSW candidate breadth and undershoots
 /// any WHERE post-filter that rejects most of those candidates. We raise

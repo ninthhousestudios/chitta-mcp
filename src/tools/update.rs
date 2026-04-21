@@ -1,0 +1,118 @@
+//! `update_memory` handler.
+//!
+//! Validate → fetch existing → optionally re-embed → UPDATE → return.
+//! `record_time` is never updated (bi-temporal invariant).
+
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use pgvector::Vector;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::db;
+use crate::embedding::Embedder;
+use crate::error::{ChittaError, Result};
+use crate::tools::validate;
+
+const TOOL: &str = "update_memory";
+
+/// Arguments for `update_memory`. At least one of `content` or `tags` must be
+/// provided. `JsonSchema` is derived so rmcp exposes the same shape on the wire.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdateArgs {
+    /// Profile scope.
+    pub profile: String,
+    /// Memory UUID to update.
+    pub id: String,
+    /// New content. If provided, the embedding is recomputed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New tags. Replaces the existing tag list entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateOutput {
+    pub id: Uuid,
+    pub profile: String,
+    pub content: String,
+    pub event_time: DateTime<Utc>,
+    pub record_time: DateTime<Utc>,
+    pub tags: Vec<String>,
+    pub re_embedded: bool,
+}
+
+#[tracing::instrument(
+    name = "tool.update_memory",
+    skip(pool, embedder, args),
+    fields(profile = %args.profile, id = %args.id),
+)]
+pub async fn handle(
+    pool: &PgPool,
+    embedder: Arc<Embedder>,
+    args: UpdateArgs,
+) -> Result<UpdateOutput> {
+    validate::profile(TOOL, &args.profile)?;
+    let id = validate::parse_uuid(TOOL, "id", &args.id)?;
+
+    if args.content.is_none() && args.tags.is_none() {
+        return Err(ChittaError::InvalidArgument {
+            tool: TOOL,
+            argument: "content/tags".to_string(),
+            constraint: "at least one of content or tags must be provided".to_string(),
+            received: None,
+            next_action: "Provide content and/or tags to update.".to_string(),
+        });
+    }
+
+    if let Some(ref content) = args.content {
+        validate::content_byte_length(TOOL, content)?;
+        validate::content_non_empty(TOOL, content)?;
+    }
+    if let Some(ref tags) = args.tags {
+        validate::tags(TOOL, tags)?;
+    }
+
+    // Verify the memory exists before attempting the update.
+    db::get_memory_by_id(pool, &args.profile, id).await?.ok_or_else(|| {
+        ChittaError::NotFound {
+            tool: TOOL,
+            kind: "memory",
+            next_action:
+                "Verify the profile and id, or call search_memories to locate the intended memory."
+                    .to_string(),
+        }
+    })?;
+
+    // If content changed, re-embed.
+    let (embedding, re_embedded) = if let Some(ref content) = args.content {
+        let embedding_vec = embedder.embed(content, TOOL).await?;
+        (Some(Vector::from(embedding_vec)), true)
+    } else {
+        (None, false)
+    };
+
+    let row = db::update_memory(
+        pool,
+        &args.profile,
+        id,
+        args.content.as_deref(),
+        embedding.as_ref(),
+        args.tags.as_deref(),
+    )
+    .await?;
+
+    Ok(UpdateOutput {
+        id: row.id,
+        profile: row.profile,
+        content: row.content,
+        event_time: row.event_time,
+        record_time: row.record_time,
+        tags: row.tags,
+        re_embedded,
+    })
+}

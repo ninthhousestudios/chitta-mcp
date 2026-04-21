@@ -61,6 +61,7 @@ pub async fn handle(
     args: StoreArgs,
 ) -> Result<StoreOutput> {
     validate::profile(TOOL, &args.profile)?;
+    validate::content_byte_length(TOOL, &args.content)?;
     validate::content_non_empty(TOOL, &args.content)?;
     validate::idempotency_key(TOOL, &args.idempotency_key)?;
     if let Some(et) = args.event_time {

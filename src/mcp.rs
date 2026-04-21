@@ -85,6 +85,49 @@ impl ChittaServer {
         .map_err(chitta_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
+
+    /// Update a memory's content and/or tags.
+    #[tool(description = "Update a memory's content and/or tags by profile + id. \
+                          At least one of content or tags must be provided. \
+                          If content changes, the embedding is recomputed. \
+                          record_time is never updated.")]
+    pub async fn update_memory(
+        &self,
+        Parameters(args): Parameters<tools::UpdateArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::update::handle(&self.pool, self.embedder.clone(), args)
+            .await
+            .map_err(chitta_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
+
+    /// Delete a memory by profile + id.
+    #[tool(description = "Hard-delete a memory by profile + id. \
+                          Returns the deleted id. Errors with not_found if the id \
+                          is unknown in that profile.")]
+    pub async fn delete_memory(
+        &self,
+        Parameters(args): Parameters<tools::DeleteArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::delete::handle(&self.pool, args)
+            .await
+            .map_err(chitta_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
+
+    /// List recent memories ordered by record_time DESC.
+    #[tool(description = "List recent memories ordered by record_time DESC with \
+                          200-char snippets. Optional tag filter (OR match). \
+                          Default limit 20, max 200. Call get_memory(id) for full content.")]
+    pub async fn list_recent_memories(
+        &self,
+        Parameters(args): Parameters<tools::ListArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::list::handle(&self.pool, args)
+            .await
+            .map_err(chitta_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
