@@ -20,13 +20,13 @@ struct Cli {
     #[arg(long)]
     http: bool,
 
-    /// HTTP listen address (used with --http).
-    #[arg(long, default_value = "127.0.0.1")]
-    http_addr: String,
+    /// HTTP listen address (used with --http). Overrides CHITTA_HTTP_ADDR.
+    #[arg(long)]
+    http_addr: Option<String>,
 
-    /// HTTP listen port (used with --http).
-    #[arg(long, default_value = "3100")]
-    http_port: u16,
+    /// HTTP listen port (used with --http). Overrides CHITTA_HTTP_PORT.
+    #[arg(long)]
+    http_port: Option<u16>,
 
     /// Path to a file containing the bearer token for HTTP auth (required with --http).
     #[arg(long)]
@@ -81,18 +81,27 @@ async fn main() -> Result<()> {
     let pool = db::connect(&cfg).await.context("connecting to database")?;
     db::run_migrations(&pool).await.context("running migrations")?;
 
-    let query_log_enabled = cfg.query_log
-        && sqlx::query("SELECT 1 FROM query_log LIMIT 0")
+    let query_log_enabled = if cfg.query_log {
+        match sqlx::query("SELECT 1 FROM query_log LIMIT 0")
             .execute(&pool)
             .await
-            .map_err(|e| {
-                tracing::warn!("query_log table missing — search logging disabled: {e}");
-                e
-            })
-            .is_ok();
-    if query_log_enabled {
-        tracing::info!("query_log enabled");
-    }
+        {
+            Ok(_) => {
+                tracing::info!("query_log enabled");
+                true
+            }
+            Err(sqlx::Error::Database(e)) if e.message().contains("does not exist") => {
+                tracing::warn!("query_log table not found — run migration 0002 to enable search logging");
+                false
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(e)
+                    .context("query_log probe failed due to a database error — not starting with ambiguous state"));
+            }
+        }
+    } else {
+        false
+    };
 
     let embedder = Embedder::load(
         &cfg.model_file(),
@@ -246,16 +255,16 @@ async fn serve_http(
         .with_context(|| format!("reading auth token from {}", token_path.display()))?
         .trim()
         .to_string();
-    anyhow::ensure!(!bearer_token.is_empty(), "auth token file is empty");
+    anyhow::ensure!(!bearer_token.is_empty(), "auth token file is empty after trimming whitespace");
+    anyhow::ensure!(
+        bearer_token.chars().all(|c| !c.is_control()),
+        "auth token contains control characters — regenerate the token file"
+    );
 
     let cancel = CancellationToken::new();
 
-    let http_addr = if cli.http_addr != "127.0.0.1" {
-        cli.http_addr.clone()
-    } else {
-        cfg.http_addr.clone()
-    };
-    let http_port = if cli.http_port != 3100 { cli.http_port } else { cfg.http_port };
+    let http_addr = cli.http_addr.unwrap_or_else(|| cfg.http_addr.clone());
+    let http_port = cli.http_port.unwrap_or(cfg.http_port);
 
     let mut allowed_hosts = vec!["localhost".to_string(), "127.0.0.1".to_string(), "::1".to_string()];
     if http_addr != "127.0.0.1" && http_addr != "localhost" && http_addr != "::1" {

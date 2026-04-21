@@ -128,6 +128,21 @@ impl ChittaServer {
             .map_err(chitta_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
+
+    /// Health check — verifies DB connectivity and embedder responsiveness.
+    #[tool(description = "Health check. Verifies DB connectivity and ONNX embedder \
+                          responsiveness. Returns status (ok/degraded), component \
+                          health flags, pool size, and server version. Call at \
+                          session start to confirm the server is operational.")]
+    pub async fn health_check(
+        &self,
+        Parameters(_args): Parameters<tools::HealthArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::health::handle(&self.pool, self.embedder.clone())
+            .await
+            .map_err(chitta_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -136,8 +151,8 @@ impl ServerHandler for ChittaServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
                 "chitta-rs v0.0.2 — agent-native persistent memory. \
-                 Six tools: store_memory, get_memory, search_memories, \
-                 update_memory, delete_memory, list_recent_memories. \
+                 Seven tools: store_memory, get_memory, search_memories, \
+                 update_memory, delete_memory, list_recent_memories, health_check. \
                  Profiles isolate namespaces; idempotency_key dedupes writes; \
                  bi-temporal (event_time + record_time); verbatim storage.",
             )

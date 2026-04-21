@@ -42,26 +42,14 @@ impl Config {
 
         let log_level = std::env::var("CHITTA_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
 
-        let db_max_connections: u32 = std::env::var("CHITTA_DB_MAX_CONNECTIONS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(8);
-        let db_acquire_timeout_secs: u64 = std::env::var("CHITTA_DB_ACQUIRE_TIMEOUT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(5);
-        let db_idle_timeout_secs: u64 = std::env::var("CHITTA_DB_IDLE_TIMEOUT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(600);
+        let db_max_connections: u32 = parse_env_or("CHITTA_DB_MAX_CONNECTIONS", 8);
+        let db_acquire_timeout_secs: u64 = parse_env_or("CHITTA_DB_ACQUIRE_TIMEOUT", 5);
+        let db_idle_timeout_secs: u64 = parse_env_or("CHITTA_DB_IDLE_TIMEOUT", 600);
 
         // Each session loads ~1-2 GB RAM (full BGE-M3 graph). Default 1
         // preserves v0.0.1 memory footprint; increase only when concurrent
         // embedding throughput justifies the RAM cost.
-        let embedder_pool_size: usize = std::env::var("CHITTA_EMBEDDER_POOL_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1)
+        let embedder_pool_size: usize = parse_env_or("CHITTA_EMBEDDER_POOL_SIZE", 1)
             .max(1); // floor at 1 — zero sessions is nonsensical
 
         // Default true; only "false" (case-insensitive) disables.
@@ -72,10 +60,7 @@ impl Config {
         let http_addr =
             std::env::var("CHITTA_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-        let http_port: u16 = std::env::var("CHITTA_HTTP_PORT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(3100);
+        let http_port: u16 = parse_env_or("CHITTA_HTTP_PORT", 3100);
 
         Ok(Self {
             database_url,
@@ -97,6 +82,22 @@ impl Config {
 
     pub fn tokenizer_file(&self) -> PathBuf {
         self.model_path.join("tokenizer.json")
+    }
+}
+
+fn parse_env_or<T: std::str::FromStr + std::fmt::Display>(name: &str, default: T) -> T {
+    match std::env::var(name) {
+        Err(_) => default,
+        Ok(v) => match v.parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                eprintln!(
+                    "WARNING: {name}={v:?} is not a valid {ty} — using default {default}",
+                    ty = std::any::type_name::<T>(),
+                );
+                default
+            }
+        },
     }
 }
 

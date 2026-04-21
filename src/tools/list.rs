@@ -76,8 +76,7 @@ pub async fn handle(pool: &PgPool, args: ListArgs) -> Result<ListOutput> {
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
 
-    let rows = db::list_recent(pool, &args.profile, limit, &tags).await?;
-    let total_in_profile = db::count_profile(pool, &args.profile).await?;
+    let (rows, total_in_profile) = db::list_recent_with_count(pool, &args.profile, limit, &tags).await?;
 
     let memories = rows
         .into_iter()

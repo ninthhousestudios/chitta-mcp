@@ -77,17 +77,6 @@ pub async fn handle(
         validate::tags(TOOL, tags)?;
     }
 
-    // Verify the memory exists before attempting the update.
-    db::get_memory_by_id(pool, &args.profile, id).await?.ok_or_else(|| {
-        ChittaError::NotFound {
-            tool: TOOL,
-            kind: "memory",
-            next_action:
-                "Verify the profile and id, or call search_memories to locate the intended memory."
-                    .to_string(),
-        }
-    })?;
-
     // If content changed, re-embed.
     let (embedding, re_embedded) = if let Some(ref content) = args.content {
         let embedding_vec = embedder.embed(content, TOOL).await?;
@@ -104,7 +93,14 @@ pub async fn handle(
         embedding.as_ref(),
         args.tags.as_deref(),
     )
-    .await?;
+    .await?
+    .ok_or_else(|| ChittaError::NotFound {
+        tool: TOOL,
+        kind: "memory",
+        next_action:
+            "Verify the profile and id, or call search_memories to locate the intended memory."
+                .to_string(),
+    })?;
 
     Ok(UpdateOutput {
         id: row.id,

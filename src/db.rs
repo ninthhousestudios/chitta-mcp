@@ -161,7 +161,7 @@ pub async fn update_memory(
     content: Option<&str>,
     embedding: Option<&Vector>,
     tags: Option<&[String]>,
-) -> Result<MemoryRow> {
+) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
         UPDATE memories
@@ -177,7 +177,7 @@ pub async fn update_memory(
     .bind(content)
     .bind(embedding)
     .bind(tags)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
     Ok(row)
 }
@@ -234,6 +234,44 @@ pub async fn count_profile(pool: &PgPool, profile: &str) -> Result<i64> {
     .fetch_one(pool)
     .await?;
     Ok(count)
+}
+
+/// List recent + count in a single transaction for consistency.
+pub async fn list_recent_with_count(
+    pool: &PgPool,
+    profile: &str,
+    limit: i64,
+    tags: &[String],
+) -> Result<(Vec<MemoryRow>, i64)> {
+    let mut tx = pool.begin().await?;
+
+    let rows = sqlx::query_as::<_, MemoryRow>(
+        r#"
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key
+        FROM memories
+        WHERE profile = $1
+          AND ($3::text[] = '{}' OR tags && $3)
+        ORDER BY record_time DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(profile)
+    .bind(limit)
+    .bind(tags)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*)::bigint FROM memories WHERE profile = $1
+        "#,
+    )
+    .bind(profile)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok((rows, count))
 }
 
 /// Minimum `hnsw.ef_search` used for every semantic query. pgvector's

@@ -5,6 +5,7 @@
 
 pub mod delete;
 pub mod get;
+pub mod health;
 pub mod list;
 pub mod search;
 pub mod store;
@@ -13,6 +14,7 @@ pub mod validate;
 
 pub use delete::{DeleteArgs, DeleteOutput};
 pub use get::{GetArgs, GetOutput};
+pub use health::{HealthArgs, HealthOutput};
 pub use list::{ListArgs, ListItem, ListOutput};
 pub use search::{SearchArgs, SearchHit, SearchOutput};
 pub use store::{StoreArgs, StoreOutput};

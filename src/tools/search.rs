@@ -78,6 +78,7 @@ pub async fn handle(
     let SearchArgs { profile, query, k, max_tokens, tags, min_similarity } = args;
 
     validate::profile(TOOL, &profile)?;
+    validate::content_byte_length(TOOL, &query)?;
     if query.is_empty() {
         return Err(ChittaError::InvalidArgument {
             tool: TOOL,

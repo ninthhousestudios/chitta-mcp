@@ -299,6 +299,10 @@ impl Embedder {
     /// Find an unlocked session via round-robin `try_lock`. The semaphore
     /// guarantees at least one session is available, so this always succeeds
     /// in practice. Falls back to index 0 if every `try_lock` loses a race.
+    pub fn pool_size(&self) -> usize {
+        self.sessions.len()
+    }
+
     fn acquire_session(&self) -> usize {
         for i in 0..self.sessions.len() {
             if self.sessions[i].try_lock().is_ok() {

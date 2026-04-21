@@ -1,0 +1,48 @@
+//! `health_check` handler.
+//!
+//! Verifies DB connectivity, ONNX embedder responsiveness, and reports
+//! pool status. Designed for agent startup probes (e.g. CLAUDE.md's
+//! `mcp__chittars__health_check` call).
+
+use std::sync::Arc;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+
+use crate::embedding::Embedder;
+use crate::error::Result;
+
+const TOOL: &str = "health_check";
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct HealthArgs {}
+
+#[derive(Debug, Serialize)]
+pub struct HealthOutput {
+    pub status: &'static str,
+    pub db_connected: bool,
+    pub embedder_ok: bool,
+    pub embedder_pool_size: usize,
+    pub version: &'static str,
+}
+
+#[tracing::instrument(name = "tool.health_check", skip(pool, embedder))]
+pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>) -> Result<HealthOutput> {
+    let db_connected = sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+        .is_ok();
+
+    let embedder_ok = embedder.embed("health check probe", TOOL).await.is_ok();
+
+    let all_ok = db_connected && embedder_ok;
+
+    Ok(HealthOutput {
+        status: if all_ok { "ok" } else { "degraded" },
+        db_connected,
+        embedder_ok,
+        embedder_pool_size: embedder.pool_size(),
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
