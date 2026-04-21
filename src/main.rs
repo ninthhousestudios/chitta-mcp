@@ -1,6 +1,7 @@
 //! chitta-rs binary entrypoint. See `docs/starting-shape.md` for scope.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -15,9 +16,21 @@ use chitta_rs::{config::Config, db, embedding::Embedder, mcp::ChittaServer};
 #[derive(Debug, Parser)]
 #[command(name = "chitta-rs", version, about)]
 struct Cli {
-    /// Reserved for v0.0.2. Using it exits cleanly with a message.
-    #[arg(long, hide = true)]
+    /// Run as a Streamable HTTP server instead of stdio.
+    #[arg(long)]
     http: bool,
+
+    /// HTTP listen address (used with --http).
+    #[arg(long, default_value = "127.0.0.1")]
+    http_addr: String,
+
+    /// HTTP listen port (used with --http).
+    #[arg(long, default_value = "3100")]
+    http_port: u16,
+
+    /// Path to a file containing the bearer token for HTTP auth (required with --http).
+    #[arg(long)]
+    auth_token_file: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -44,21 +57,11 @@ async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
     let cli = Cli::parse();
-    if cli.http {
-        eprintln!(
-            "HTTP transport lands in v0.0.2. v0.0.1 is stdio-only — run without --http."
-        );
-        std::process::exit(2);
-    }
-
     match cli.command {
-        Some(Commands::Replay { profile, limit }) => run_replay(profile, limit).await,
-        // `serve` subcommand or no subcommand — both run the MCP server.
-        Some(Commands::Serve) | None => run_serve().await,
+        Some(Commands::Replay { profile, limit }) => return run_replay(profile, limit).await,
+        Some(Commands::Serve) | None => {}
     }
-}
 
-async fn run_serve() -> Result<()> {
     let cfg = Config::from_env().context("loading configuration from environment")?;
 
     // Logs go to stderr so stdout stays reserved for the MCP frame stream.
@@ -98,6 +101,19 @@ async fn run_serve() -> Result<()> {
     )
     .context("loading embedding model")?;
 
+    if cli.http {
+        serve_http(cli, cfg, pool, embedder, query_log_enabled).await
+    } else {
+        serve_stdio(pool, embedder, query_log_enabled).await
+    }
+}
+
+/// Stdio transport — the original v0.0.1 path.
+async fn serve_stdio(
+    pool: sqlx::PgPool,
+    embedder: Arc<Embedder>,
+    query_log_enabled: bool,
+) -> Result<()> {
     let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled);
     let (stdin, stdout) = stdio();
 
@@ -121,15 +137,12 @@ async fn run_serve() -> Result<()> {
 async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
     let cfg = Config::from_env().context("loading configuration from environment")?;
 
-    // Replay writes to stdout — keep tracing on stderr, but silence it by
-    // default so the table isn't polluted with log lines.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("warn"))
         .with_writer(std::io::stderr)
         .init();
 
     let pool = db::connect(&cfg).await.context("connecting to database")?;
-    // Migrations may not have run yet in some envs; run them to be safe.
     db::run_migrations(&pool).await.context("running migrations")?;
 
     let entries = db::read_query_log(&pool, profile.as_deref(), limit)
@@ -177,7 +190,6 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
 
         total_overlap += overlap_pct;
 
-        // Truncate query text to 50 chars for display.
         let query_display: String = entry.query_text.chars().take(50).collect();
         let query_display = if entry.query_text.chars().count() > 50 {
             format!("{query_display}...")
@@ -185,7 +197,6 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
             query_display
         };
 
-        // Truncate profile to 8 chars.
         let profile_display: String = entry.profile.chars().take(8).collect();
 
         println!(
@@ -208,6 +219,85 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
         avg_overlap,
         entries.len()
     );
+
+    Ok(())
+}
+
+/// Streamable HTTP transport with bearer-token auth.
+async fn serve_http(
+    cli: Cli,
+    cfg: Config,
+    pool: sqlx::PgPool,
+    embedder: Arc<Embedder>,
+    query_log_enabled: bool,
+) -> Result<()> {
+    use axum::routing::any_service;
+    use rmcp::transport::streamable_http_server::{
+        session::local::LocalSessionManager,
+        tower::{StreamableHttpServerConfig, StreamableHttpService},
+    };
+    use tokio_util::sync::CancellationToken;
+    use tower_http::validate_request::ValidateRequestHeaderLayer;
+
+    let token_path = cli.auth_token_file.ok_or_else(|| {
+        anyhow::anyhow!("--auth-token-file is required when running in --http mode")
+    })?;
+    let bearer_token = std::fs::read_to_string(&token_path)
+        .with_context(|| format!("reading auth token from {}", token_path.display()))?
+        .trim()
+        .to_string();
+    anyhow::ensure!(!bearer_token.is_empty(), "auth token file is empty");
+
+    let cancel = CancellationToken::new();
+
+    let http_addr = if cli.http_addr != "127.0.0.1" {
+        cli.http_addr.clone()
+    } else {
+        cfg.http_addr.clone()
+    };
+    let http_port = if cli.http_port != 3100 { cli.http_port } else { cfg.http_port };
+
+    let mut allowed_hosts = vec!["localhost".to_string(), "127.0.0.1".to_string(), "::1".to_string()];
+    if http_addr != "127.0.0.1" && http_addr != "localhost" && http_addr != "::1" {
+        allowed_hosts.push(http_addr.clone());
+    }
+
+    let config = StreamableHttpServerConfig::default()
+        .with_cancellation_token(cancel.clone())
+        .with_allowed_hosts(allowed_hosts);
+
+    let session_manager = Arc::new(LocalSessionManager::default());
+
+    let pool_clone = pool.clone();
+    let embedder_clone = Arc::clone(&embedder);
+    let ql = query_log_enabled;
+    let mcp_service = StreamableHttpService::new(
+        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql)),
+        session_manager,
+        config,
+    );
+
+    #[allow(deprecated)]
+    let app = axum::Router::new()
+        .route("/mcp", any_service(mcp_service))
+        .layer(ValidateRequestHeaderLayer::bearer(&bearer_token));
+
+    let addr = format!("{http_addr}:{http_port}");
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to bind {addr}: {e} — is the port in use?"))?;
+    tracing::info!(%addr, "chitta-rs HTTP server listening");
+
+    let cancel_for_shutdown = cancel.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown signal received, draining connections");
+            cancel_for_shutdown.cancel();
+        })
+        .await
+        .context("HTTP server exited with error")?;
+
 
     Ok(())
 }

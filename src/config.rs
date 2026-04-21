@@ -21,6 +21,10 @@ pub struct Config {
     /// Whether to log search queries to `query_log` for retrieval research.
     /// Parsed from `CHITTA_QUERY_LOG` env var. Default `true`.
     pub query_log: bool,
+    /// HTTP listen address. Parsed from `CHITTA_HTTP_ADDR`. Default `127.0.0.1`.
+    pub http_addr: String,
+    /// HTTP listen port. Parsed from `CHITTA_HTTP_PORT`. Default `3100`.
+    pub http_port: u16,
 }
 
 impl Config {
@@ -65,6 +69,14 @@ impl Config {
             .map(|v| !v.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
 
+        let http_addr =
+            std::env::var("CHITTA_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+
+        let http_port: u16 = std::env::var("CHITTA_HTTP_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3100);
+
         Ok(Self {
             database_url,
             model_path,
@@ -74,6 +86,8 @@ impl Config {
             db_idle_timeout_secs,
             embedder_pool_size,
             query_log,
+            http_addr,
+            http_port,
         })
     }
 
