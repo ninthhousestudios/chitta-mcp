@@ -4,18 +4,20 @@
 //! call tokenizes, rejects > 8192 tokens, runs the ONNX session, and returns
 //! a 1024-dim `Vec<f32>`.
 //!
-//! # Concurrency caveat (read before enabling new transports)
+//! # Session pooling
 //!
-//! The ONNX session lives behind a blocking [`Mutex`]. `ort 2.0.0-rc.10`'s
-//! `Session::run` takes `&mut self`, so we can't share it directly. For
-//! v0.0.1 this is fine because the stdio transport is single-request by
-//! construction: only one tool call is ever in flight. **The moment a
-//! transport pipelines requests — v0.0.2 HTTP, any concurrent MCP client
-//! — this mutex becomes a global embedding bottleneck.** Before shipping
-//! such a transport, replace the mutex with (a) a dedicated embedder
-//! thread pool fed by an mpsc queue, or (b) an `ort` version that supports
-//! `&self` inference, or (c) a pool of sessions. Do not add a second
-//! transport without revisiting this.
+//! The ONNX runtime session (`Session::run` takes `&mut self` in ort
+//! 2.0.0-rc.10) is guarded by `std::sync::Mutex` — NOT `tokio::sync::Mutex`,
+//! because ort's `Session` is not `Send` across `.await` points. A pool of N
+//! independent sessions sits behind a `tokio::sync::Semaphore` that caps
+//! concurrency. Tokenization and tensor construction happen outside any lock;
+//! only the `session.run()` call holds a session mutex, and it runs inside
+//! `spawn_blocking` so the tokio runtime is never blocked.
+//!
+//! Default pool size is 1 (same memory footprint as v0.0.1). Each additional
+//! session loads the full ONNX graph into RAM (~1-2 GB for BGE-M3). Set
+//! `CHITTA_EMBEDDER_POOL_SIZE` to scale up when concurrent embedding
+//! throughput matters more than memory.
 //!
 //! # Model output note
 //!
@@ -30,13 +32,15 @@
 //! The `sparse_weights` output is ignored in v0.0.1 (no sparse column in the
 //! starting shape).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ndarray::Array2;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Value;
 use tokenizers::Tokenizer;
+use tokio::sync::Semaphore;
 
 use crate::error::{ChittaError, Result};
 
@@ -48,17 +52,45 @@ pub const EMBEDDING_DIM: usize = 1024;
 /// embed a truncated version of stored content).
 pub const MAX_TOKENS: usize = 8192;
 
+/// Timeout for a single ONNX inference call. If a session.run() takes
+/// longer than this, something is seriously wrong (OOM thrashing, etc.).
+const INFERENCE_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub struct Embedder {
     tokenizer: Tokenizer,
-    // `Session::run` takes `&mut self` in ort 2.0.0-rc.10, so we guard it with
-    // a blocking mutex. Embedding is CPU-bound and already serialized in v0.0.1
-    // (stdio handles one request at a time); the mutex is not on any hot path.
-    session: Mutex<Session>,
+    /// Pool of ONNX sessions. Each is independently loadable and guarded by
+    /// a blocking `std::sync::Mutex` (not tokio — `Session` is !Send across
+    /// `.await`). The `semaphore` limits how many sessions can be in use
+    /// concurrently, so `acquire_session` always finds an unlocked slot.
+    sessions: Vec<Mutex<Session>>,
+    semaphore: Semaphore,
+    /// Retained for diagnostic logging; not used at runtime.
+    #[allow(dead_code)]
+    model_path: PathBuf,
+    #[allow(dead_code)]
+    tokenizer_path: PathBuf,
 }
 
 impl Embedder {
-    pub fn load(model_path: &Path, tokenizer_path: &Path) -> Result<Arc<Self>> {
-        tracing::info!(model = ?model_path, tokenizer = ?tokenizer_path, "loading BGE-M3");
+    /// Load the BGE-M3 model and tokenizer, creating `pool_size` independent
+    /// ONNX sessions.
+    ///
+    /// Each session loads the full ONNX graph into RAM (~1-2 GB for BGE-M3).
+    /// A `pool_size` of 1 matches v0.0.1 memory footprint. Increase only
+    /// when concurrent embedding throughput justifies the RAM cost.
+    pub fn load(
+        model_path: &Path,
+        tokenizer_path: &Path,
+        pool_size: usize,
+    ) -> Result<Arc<Self>> {
+        assert!(pool_size >= 1, "embedder pool_size must be >= 1");
+
+        tracing::info!(
+            model = ?model_path,
+            tokenizer = ?tokenizer_path,
+            pool_size,
+            "loading BGE-M3"
+        );
 
         let mut tokenizer =
             Tokenizer::from_file(tokenizer_path).map_err(|e| ChittaError::Embedding {
@@ -79,24 +111,45 @@ impl Embedder {
                 .expect("disabling truncation should not fail");
         }
 
-        let session = Session::builder()
-            .map_err(embedding_startup_err)?
-            .with_optimization_level(GraphOptimizationLevel::Level1)
-            .map_err(embedding_startup_err)?
-            .commit_from_file(model_path)
-            .map_err(|e| ChittaError::Embedding {
-                tool: "startup",
-                message: format!("failed to load ONNX model at {model_path:?}: {e}"),
-                next_action:
-                    "Ensure CHITTA_MODEL_PATH contains bge_m3_model.onnx (and its .onnx_data \
-                     sidecar) and that libonnxruntime is installed or ORT_DYLIB_PATH is set."
-                        .to_string(),
-            })?;
+        let mut sessions = Vec::with_capacity(pool_size);
+        for i in 0..pool_size {
+            let session = Session::builder()
+                .map_err(embedding_startup_err)?
+                .with_optimization_level(GraphOptimizationLevel::Level1)
+                .map_err(embedding_startup_err)?
+                .commit_from_file(model_path)
+                .map_err(|e| ChittaError::Embedding {
+                    tool: "startup",
+                    message: format!(
+                        "failed to load ONNX model (session {i}/{pool_size}) at {model_path:?}: {e}"
+                    ),
+                    next_action:
+                        "Ensure CHITTA_MODEL_PATH contains bge_m3_model.onnx (and its .onnx_data \
+                         sidecar) and that libonnxruntime is installed or ORT_DYLIB_PATH is set."
+                            .to_string(),
+                })?;
+            sessions.push(Mutex::new(session));
+        }
 
-        Ok(Arc::new(Self { tokenizer, session: Mutex::new(session) }))
+        Ok(Arc::new(Self {
+            tokenizer,
+            sessions,
+            semaphore: Semaphore::new(pool_size),
+            model_path: model_path.to_path_buf(),
+            tokenizer_path: tokenizer_path.to_path_buf(),
+        }))
     }
 
-    pub fn embed(&self, text: &str, tool: &'static str) -> Result<Vec<f32>> {
+    /// Embed `text` into a 1024-dim dense vector.
+    ///
+    /// Tokenization and tensor construction are synchronous (fast, no lock).
+    /// The ONNX inference runs inside `spawn_blocking` so the tokio runtime
+    /// is never blocked by the CPU-bound graph evaluation.
+    ///
+    /// Takes `self: &Arc<Self>` so we can clone the Arc into the
+    /// `spawn_blocking` closure (which requires `Send + 'static`).
+    pub async fn embed(self: &Arc<Self>, text: &str, tool: &'static str) -> Result<Vec<f32>> {
+        // 1. Tokenize (fast, sync — no lock needed).
         let encoding = self
             .tokenizer
             .encode(text, true)
@@ -119,6 +172,7 @@ impl Embedder {
             });
         }
 
+        // 2. Build input tensors (fast, sync).
         let seq_len = ids.len();
         let input_ids: Vec<i64> = ids.iter().map(|&id| id as i64).collect();
         let attention_mask: Vec<i64> = attn.iter().map(|&m| m as i64).collect();
@@ -136,42 +190,80 @@ impl Embedder {
         let attention_mask_value =
             Value::from_array(attention_mask_arr).map_err(|e| ort_to_embed_err(e, tool))?;
 
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|e| ChittaError::Internal(format!("embedding session mutex poisoned: {e}")))?;
-        let outputs = session
-            .run(ort::inputs![
-                "input_ids" => input_ids_value,
-                "attention_mask" => attention_mask_value,
-            ])
-            .map_err(|e| ort_to_embed_err(e, tool))?;
+        // 3. Acquire pool slot (async wait if all sessions are busy).
+        let _permit = self.semaphore.acquire().await.map_err(|_| {
+            ChittaError::Internal("embedder pool closed".into())
+        })?;
 
-        let dense = outputs
-            .get("dense_embeddings")
-            .ok_or_else(|| ChittaError::Embedding {
-                tool,
-                message: "ONNX session produced no `dense_embeddings` output".to_string(),
-                next_action: "Report this as a bug; include server logs.".to_string(),
-            })?;
+        // 4. Find an available session via round-robin try_lock.
+        let session_idx = self.acquire_session();
 
-        let (shape, data) =
-            dense.try_extract_tensor::<f32>().map_err(|e| ort_to_embed_err(e, tool))?;
+        // 5. Run inference in a blocking thread with timeout.
+        //    Clone the Arc so the closure is 'static + Send. The Mutex guard
+        //    is created and consumed entirely within the blocking closure —
+        //    it never crosses an .await point.
+        let embedder = Arc::clone(self);
 
-        // Expected shape is [1, 1024]; accept either [1, 1024] or [1024]
-        // to stay robust against minor export differences.
-        let total: usize = shape.iter().map(|&d| d as usize).product();
-        if total != EMBEDDING_DIM {
-            return Err(ChittaError::Embedding {
-                tool,
-                message: format!(
-                    "unexpected embedding shape {shape:?}; expected {EMBEDDING_DIM} elements"
-                ),
-                next_action: "Report this as a bug; include server logs.".to_string(),
-            });
+        let result = tokio::time::timeout(INFERENCE_TIMEOUT, tokio::task::spawn_blocking(
+            move || {
+                let mut session = embedder.sessions[session_idx]
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let outputs = session
+                    .run(ort::inputs![
+                        "input_ids" => input_ids_value,
+                        "attention_mask" => attention_mask_value,
+                    ])
+                    .map_err(|e| ort_to_embed_err(e, tool))?;
+
+                let dense = outputs
+                    .get("dense_embeddings")
+                    .ok_or_else(|| ChittaError::Embedding {
+                        tool,
+                        message: "ONNX session produced no `dense_embeddings` output".to_string(),
+                        next_action: "Report this as a bug; include server logs.".to_string(),
+                    })?;
+
+                let (shape, data) =
+                    dense.try_extract_tensor::<f32>().map_err(|e| ort_to_embed_err(e, tool))?;
+
+                // Expected shape is [1, 1024]; accept either [1, 1024] or [1024]
+                // to stay robust against minor export differences.
+                let total: usize = shape.iter().map(|&d| d as usize).product();
+                if total != EMBEDDING_DIM {
+                    return Err(ChittaError::Embedding {
+                        tool,
+                        message: format!(
+                            "unexpected embedding shape {shape:?}; expected {EMBEDDING_DIM} elements"
+                        ),
+                        next_action: "Report this as a bug; include server logs.".to_string(),
+                    });
+                }
+
+                Ok(data.to_vec())
+            },
+        ))
+        .await
+        .map_err(|_| ChittaError::Internal(
+            "embedding inference timed out (60s limit)".into(),
+        ))?
+        .map_err(|e| ChittaError::Internal(format!("spawn_blocking failed: {e}")))?;
+
+        result
+    }
+
+    /// Find an unlocked session via round-robin `try_lock`. The semaphore
+    /// guarantees at least one session is available, so this always succeeds
+    /// in practice. Falls back to index 0 if every `try_lock` loses a race.
+    fn acquire_session(&self) -> usize {
+        for i in 0..self.sessions.len() {
+            if self.sessions[i].try_lock().is_ok() {
+                return i;
+            }
         }
-
-        Ok(data.to_vec())
+        // Semaphore guarantees availability — this is a fallback for the
+        // (astronomically unlikely) case where every try_lock loses a race.
+        0
     }
 }
 

@@ -65,6 +65,9 @@ anyhow = "1"
 # CLI flag parsing. Needed now for --version; --http stub lands in v0.0.2.
 clap = { version = "4", features = ["derive"] }
 
+# CPU count for optional auto-sizing of embedder pool.
+num_cpus = "1"
+
 # HTTP transport stack for v0.0.2 (Issue 9). Not wired yet; deps land here
 # so the lockfile is stable before the transport module is written.
 axum = "0.8"
