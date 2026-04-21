@@ -3,11 +3,17 @@
 //! Each tool lives in its own submodule with `Args` + `Output` types
 //! (`serde::Deserialize` / `Serialize`) and one async `handle` fn.
 
+pub mod delete;
 pub mod get;
+pub mod list;
 pub mod search;
 pub mod store;
+pub mod update;
 pub mod validate;
 
+pub use delete::{DeleteArgs, DeleteOutput};
 pub use get::{GetArgs, GetOutput};
+pub use list::{ListArgs, ListItem, ListOutput};
 pub use search::{SearchArgs, SearchHit, SearchOutput};
 pub use store::{StoreArgs, StoreOutput};
+pub use update::{UpdateArgs, UpdateOutput};

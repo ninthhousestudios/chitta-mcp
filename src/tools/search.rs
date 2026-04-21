@@ -214,7 +214,7 @@ fn apply_budget(
 
 /// Verbatim char-prefix of `s` up to `max_chars` Unicode scalar values.
 /// No ellipsis; if `s` is shorter, returns it unchanged.
-fn prefix_chars(s: &str, max_chars: usize) -> String {
+pub(crate) fn prefix_chars(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
