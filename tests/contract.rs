@@ -7,7 +7,10 @@
 
 use chitta_rs::envelope::Envelope;
 use chitta_rs::error::{ChittaError, codes};
-use chitta_rs::tools::{GetArgs, GetOutput, SearchArgs, SearchHit, SearchOutput, StoreArgs, StoreOutput};
+use chitta_rs::tools::{
+    DeleteArgs, DeleteOutput, GetArgs, GetOutput, ListArgs, ListItem, ListOutput, SearchArgs,
+    SearchHit, SearchOutput, StoreArgs, StoreOutput, UpdateArgs, UpdateOutput,
+};
 use serde_json::{Value, json};
 
 /// Helper: assert that `value` is a JSON object and every `key` is present.
@@ -287,4 +290,121 @@ fn chitta_to_rmcp_preserves_code_and_contract_fields() {
             assert!(!v.is_empty(), "missing `data.{required}` for {label}: {wire}");
         }
     }
+}
+
+// ---- UpdateArgs / UpdateOutput ----------------------------------------
+
+#[test]
+fn update_args_shape() {
+    // Minimum: profile + id + at least one of content/tags.
+    let v = json!({
+        "profile": "p",
+        "id": "00000000-0000-0000-0000-000000000001",
+        "content": "new content",
+    });
+    let args: UpdateArgs = serde_json::from_value(v).unwrap();
+    assert_eq!(args.profile, "p");
+    assert_eq!(args.id, "00000000-0000-0000-0000-000000000001");
+    assert_eq!(args.content.as_deref(), Some("new content"));
+    assert!(args.tags.is_none());
+
+    // Tags only, no content.
+    let v2 = json!({
+        "profile": "p",
+        "id": "00000000-0000-0000-0000-000000000002",
+        "tags": ["a", "b"],
+    });
+    let args2: UpdateArgs = serde_json::from_value(v2).unwrap();
+    assert!(args2.content.is_none());
+    assert_eq!(args2.tags.unwrap(), vec!["a".to_string(), "b".to_string()]);
+
+    // Both content and tags.
+    let v3 = json!({
+        "profile": "p",
+        "id": "00000000-0000-0000-0000-000000000003",
+        "content": "updated",
+        "tags": ["x"],
+    });
+    let args3: UpdateArgs = serde_json::from_value(v3).unwrap();
+    assert!(args3.content.is_some());
+    assert!(args3.tags.is_some());
+}
+
+#[test]
+fn update_output_wire_keys() {
+    let t = chrono::Utc::now();
+    let out = UpdateOutput {
+        id: uuid::Uuid::now_v7(),
+        profile: "p".into(),
+        content: "c".into(),
+        event_time: t,
+        record_time: t,
+        tags: vec!["t".into()],
+        re_embedded: true,
+    };
+    let v = serde_json::to_value(&out).unwrap();
+    assert_keys(
+        &v,
+        &["id", "profile", "content", "event_time", "record_time", "tags", "re_embedded"],
+    );
+    assert_eq!(v["re_embedded"], json!(true));
+}
+
+// ---- DeleteArgs / DeleteOutput ----------------------------------------
+
+#[test]
+fn delete_args_shape() {
+    let v = json!({"profile": "p", "id": "abc-123"});
+    let args: DeleteArgs = serde_json::from_value(v).unwrap();
+    assert_eq!(args.profile, "p");
+    assert_eq!(args.id, "abc-123");
+}
+
+#[test]
+fn delete_output_wire_keys() {
+    let out = DeleteOutput {
+        id: uuid::Uuid::now_v7(),
+        deleted: true,
+    };
+    let v = serde_json::to_value(&out).unwrap();
+    assert_keys(&v, &["id", "deleted"]);
+    assert_eq!(v["deleted"], json!(true));
+}
+
+// ---- ListArgs / ListOutput --------------------------------------------
+
+#[test]
+fn list_args_shape() {
+    // Minimum: just profile.
+    let v = json!({"profile": "p"});
+    let args: ListArgs = serde_json::from_value(v).unwrap();
+    assert_eq!(args.profile, "p");
+    assert!(args.limit.is_none());
+    assert!(args.tags.is_none());
+
+    // Full payload.
+    let v2 = json!({"profile": "p", "limit": 5, "tags": ["x"]});
+    let args2: ListArgs = serde_json::from_value(v2).unwrap();
+    assert_eq!(args2.limit, Some(5));
+    assert_eq!(args2.tags.unwrap(), vec!["x".to_string()]);
+}
+
+#[test]
+fn list_output_wire_keys() {
+    let t = chrono::Utc::now();
+    let item = ListItem {
+        id: uuid::Uuid::now_v7(),
+        snippet: "snip".into(),
+        event_time: t,
+        record_time: t,
+        tags: vec!["t".into()],
+    };
+    let out = ListOutput {
+        memories: vec![item],
+        total_in_profile: 1,
+    };
+    let v = serde_json::to_value(&out).unwrap();
+    assert_keys(&v, &["memories", "total_in_profile"]);
+    let first = &v["memories"][0];
+    assert_keys(first, &["id", "snippet", "event_time", "record_time", "tags"]);
 }
