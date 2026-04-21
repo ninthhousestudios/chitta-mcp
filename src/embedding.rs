@@ -32,6 +32,7 @@
 //! The `sparse_weights` output is ignored in v0.0.1 (no sparse column in the
 //! starting shape).
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -64,8 +65,7 @@ pub struct Embedder {
     /// concurrently, so `acquire_session` always finds an unlocked slot.
     sessions: Vec<Mutex<Session>>,
     semaphore: Semaphore,
-    /// Retained for diagnostic logging; not used at runtime.
-    #[allow(dead_code)]
+    /// Retained for session replacement and diagnostic logging.
     model_path: PathBuf,
     #[allow(dead_code)]
     tokenizer_path: PathBuf,
@@ -204,43 +204,81 @@ impl Embedder {
         //    it never crosses an .await point.
         let embedder = Arc::clone(self);
 
-        let result = tokio::time::timeout(INFERENCE_TIMEOUT, tokio::task::spawn_blocking(
+        // Returns (inference_result, panicked). The `panicked` flag tells the
+        // async context to replace the session slot before propagating the error.
+        let blocking_result = tokio::time::timeout(INFERENCE_TIMEOUT, tokio::task::spawn_blocking(
             move || {
-                let mut session = embedder.sessions[session_idx]
+                let mut guard = embedder.sessions[session_idx]
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let outputs = session
-                    .run(ort::inputs![
+
+                // Wrap only session.run() with catch_unwind. ORT sessions can
+                // panic internally on certain malformed inputs or internal bugs;
+                // we want to catch those and replace the session rather than
+                // crash the process.
+                let run_result = catch_unwind(AssertUnwindSafe(|| {
+                    guard.run(ort::inputs![
                         "input_ids" => input_ids_value,
                         "attention_mask" => attention_mask_value,
                     ])
-                    .map_err(|e| ort_to_embed_err(e, tool))?;
+                }));
 
-                let dense = outputs
-                    .get("dense_embeddings")
-                    .ok_or_else(|| ChittaError::Embedding {
-                        tool,
-                        message: "ONNX session produced no `dense_embeddings` output".to_string(),
-                        next_action: "Report this as a bug; include server logs.".to_string(),
-                    })?;
+                match run_result {
+                    Err(_panic_payload) => {
+                        // Session panicked — signal the async context to replace it.
+                        (
+                            Err(ChittaError::Embedding {
+                                tool,
+                                message: "ONNX session panicked and was replaced".into(),
+                                next_action: "Retry the request.".into(),
+                            }),
+                            true, // panicked
+                        )
+                    }
+                    Ok(Err(ort_err)) => (
+                        Err(ChittaError::Embedding {
+                            tool,
+                            message: format!("ONNX inference failed: {ort_err}"),
+                            next_action: "Retry the request. If persistent, check model file integrity.".into(),
+                        }),
+                        false,
+                    ),
+                    Ok(Ok(outputs)) => {
+                        let dense_result = (|| {
+                            let dense = outputs
+                                .get("dense_embeddings")
+                                .ok_or_else(|| ChittaError::Embedding {
+                                    tool,
+                                    message: "ONNX session produced no `dense_embeddings` output"
+                                        .to_string(),
+                                    next_action: "Report this as a bug; include server logs."
+                                        .to_string(),
+                                })?;
 
-                let (shape, data) =
-                    dense.try_extract_tensor::<f32>().map_err(|e| ort_to_embed_err(e, tool))?;
+                            let (shape, data) = dense
+                                .try_extract_tensor::<f32>()
+                                .map_err(|e| ort_to_embed_err(e, tool))?;
 
-                // Expected shape is [1, 1024]; accept either [1, 1024] or [1024]
-                // to stay robust against minor export differences.
-                let total: usize = shape.iter().map(|&d| d as usize).product();
-                if total != EMBEDDING_DIM {
-                    return Err(ChittaError::Embedding {
-                        tool,
-                        message: format!(
-                            "unexpected embedding shape {shape:?}; expected {EMBEDDING_DIM} elements"
-                        ),
-                        next_action: "Report this as a bug; include server logs.".to_string(),
-                    });
+                            // Expected shape is [1, 1024]; accept either [1, 1024] or [1024]
+                            // to stay robust against minor export differences.
+                            let total: usize = shape.iter().map(|&d| d as usize).product();
+                            if total != EMBEDDING_DIM {
+                                return Err(ChittaError::Embedding {
+                                    tool,
+                                    message: format!(
+                                        "unexpected embedding shape {shape:?}; expected \
+                                         {EMBEDDING_DIM} elements"
+                                    ),
+                                    next_action: "Report this as a bug; include server logs."
+                                        .to_string(),
+                                });
+                            }
+
+                            Ok(data.to_vec())
+                        })();
+                        (dense_result, false)
+                    }
                 }
-
-                Ok(data.to_vec())
             },
         ))
         .await
@@ -248,6 +286,12 @@ impl Embedder {
             "embedding inference timed out (60s limit)".into(),
         ))?
         .map_err(|e| ChittaError::Internal(format!("spawn_blocking failed: {e}")))?;
+
+        let (result, panicked) = blocking_result;
+        if panicked {
+            tracing::warn!(session = session_idx, "ONNX session panicked — replacing slot");
+            self.replace_session(session_idx);
+        }
 
         result
     }
@@ -264,6 +308,30 @@ impl Embedder {
         // Semaphore guarantees availability — this is a fallback for the
         // (astronomically unlikely) case where every try_lock loses a race.
         0
+    }
+
+    /// Replace a panicked or poisoned session slot with a fresh ONNX session.
+    ///
+    /// Called by the async context after `spawn_blocking` signals a panic.
+    /// If the replacement fails (e.g., model file missing), the slot stays
+    /// in whatever state the Mutex is in — other slots continue operating.
+    fn replace_session(&self, idx: usize) {
+        match Session::builder()
+            .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level1))
+            .and_then(|b| b.commit_from_file(&self.model_path))
+        {
+            Ok(new_session) => {
+                *self.sessions[idx].lock().unwrap_or_else(|e| e.into_inner()) = new_session;
+                tracing::info!(session = idx, "replacement ONNX session loaded");
+            }
+            Err(e) => {
+                tracing::error!(
+                    session = idx,
+                    error = %e,
+                    "failed to create replacement session — slot degraded"
+                );
+            }
+        }
     }
 }
 
