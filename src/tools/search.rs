@@ -120,18 +120,21 @@ pub async fn handle(
         })
         .collect();
 
-    let (results, mut truncated) = apply_budget(candidates, max_tokens);
+    let total_available_u64 = u64::try_from(total_available).unwrap_or(0);
+    let (results, mut truncated) = apply_budget(candidates, max_tokens, total_available_u64);
 
-    // `k` bound is applied by SQL `limit`, but if the DB returned fewer rows
-    // than `total_available`, that was a hard `k` cut — flag `truncated`.
-    if !truncated && (results.len() as i64) < total_available {
+    // `truncated` reflects only budget truncation and k-limit. If the DB
+    // returned exactly k rows, the SQL LIMIT was hit — flag `truncated`.
+    // `total_available` is still reported in the envelope for informational
+    // purposes but no longer drives agent pagination decisions.
+    if !truncated && results.len() == k as usize {
         truncated = true;
     }
 
     // Build the envelope, then overwrite `budget_spent_tokens` with the
     // estimator applied to the fully-assembled payload. This avoids a
     // magic-constant overhead and matches what the wire will carry.
-    let mut envelope = Envelope::new(results, truncated, Some(u64::try_from(total_available).unwrap_or(0)), 0);
+    let mut envelope = Envelope::new(results, truncated, Some(total_available_u64), 0);
     envelope.budget_spent_tokens = estimate_tokens(&envelope);
     Ok(envelope)
 }
@@ -146,15 +149,21 @@ pub async fn handle(
 /// envelope wrapper fields (`results`, `truncated`, `total_available`,
 /// `budget_spent_tokens`), not just hit payloads — so the number the caller
 /// sees is the number the cap enforced against.
-fn apply_budget(candidates: Vec<SearchHit>, max_tokens: Option<u64>) -> (Vec<SearchHit>, bool) {
+fn apply_budget(
+    candidates: Vec<SearchHit>,
+    max_tokens: Option<u64>,
+    total_available: u64,
+) -> (Vec<SearchHit>, bool) {
     let Some(cap) = max_tokens else {
         return (candidates, false);
     };
     // Seed `spent` with the fixed overhead of an empty envelope — the
     // wrapper JSON exists even when `results` is `[]`, and callers who
     // pass a tight cap should see truncation triggered honestly.
-    let empty: Envelope<SearchHit> = Envelope::new(vec![], false, None, 0);
-    let overhead = estimate_tokens(&empty);
+    // Use the real `total_available` so the seed envelope matches the shape
+    // of the final envelope (Some(n) vs None changes the serialised length).
+    let overhead_envelope = Envelope::new(Vec::<SearchHit>::new(), false, Some(total_available), 0);
+    let overhead = estimate_tokens(&overhead_envelope);
     let mut results: Vec<SearchHit> = Vec::with_capacity(candidates.len());
     let mut spent = overhead;
     let mut truncated = false;
@@ -213,7 +222,7 @@ mod tests {
     #[test]
     fn apply_budget_none_keeps_all() {
         let candidates = vec![hit("a"), hit("b"), hit("c")];
-        let (results, truncated) = apply_budget(candidates, None);
+        let (results, truncated) = apply_budget(candidates, None, 0);
         assert_eq!(results.len(), 3);
         assert!(!truncated);
     }
@@ -221,7 +230,7 @@ mod tests {
     #[test]
     fn apply_budget_tight_keeps_at_least_one() {
         // Any single hit is larger than 1 token. We still get the first.
-        let (results, truncated) = apply_budget(vec![hit("first"), hit("second")], Some(1));
+        let (results, truncated) = apply_budget(vec![hit("first"), hit("second")], Some(1), 0);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].snippet, "first");
         assert!(truncated);
@@ -234,7 +243,7 @@ mod tests {
         let h2 = hit("two");
         let per = estimate_tokens(&h1);
         let cap = per; // fits the first, blocks the second
-        let (results, truncated) = apply_budget(vec![h1, h2], Some(cap));
+        let (results, truncated) = apply_budget(vec![h1, h2], Some(cap), 0);
         assert_eq!(results.len(), 1);
         assert!(truncated);
     }
@@ -243,7 +252,7 @@ mod tests {
     fn apply_budget_fits_full_list_when_cap_is_ample() {
         let candidates = vec![hit("a"), hit("b"), hit("c")];
         let total: u64 = candidates.iter().map(estimate_tokens).sum();
-        let (results, truncated) = apply_budget(candidates, Some(total + 100));
+        let (results, truncated) = apply_budget(candidates, Some(total + 100), 0);
         assert_eq!(results.len(), 3);
         assert!(!truncated);
     }
