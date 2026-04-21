@@ -15,6 +15,9 @@ pub struct Config {
     pub db_max_connections: u32,
     pub db_acquire_timeout_secs: u64,
     pub db_idle_timeout_secs: u64,
+    /// Number of independent ONNX sessions in the embedder pool.
+    /// Each session loads the full BGE-M3 graph (~1-2 GB RAM). Default 1.
+    pub embedder_pool_size: usize,
 }
 
 impl Config {
@@ -45,6 +48,15 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(600);
 
+        // Each session loads ~1-2 GB RAM (full BGE-M3 graph). Default 1
+        // preserves v0.0.1 memory footprint; increase only when concurrent
+        // embedding throughput justifies the RAM cost.
+        let embedder_pool_size: usize = std::env::var("CHITTA_EMBEDDER_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
+            .max(1); // floor at 1 — zero sessions is nonsensical
+
         Ok(Self {
             database_url,
             model_path,
@@ -52,6 +64,7 @@ impl Config {
             db_max_connections,
             db_acquire_timeout_secs,
             db_idle_timeout_secs,
+            embedder_pool_size,
         })
     }
 

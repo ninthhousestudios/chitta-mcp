@@ -89,6 +89,7 @@ async fn try_shared() -> Option<SharedSetup> {
         db_max_connections: 8,
         db_acquire_timeout_secs: 5,
         db_idle_timeout_secs: 600,
+        embedder_pool_size: 1,
     };
 
     if !cfg.model_file().is_file() || !cfg.tokenizer_file().is_file() {
@@ -111,7 +112,7 @@ async fn try_shared() -> Option<SharedSetup> {
     }
     drop(bootstrap_pool);
 
-    let embedder = match Embedder::load(&cfg.model_file(), &cfg.tokenizer_file()) {
+    let embedder = match Embedder::load(&cfg.model_file(), &cfg.tokenizer_file(), 1) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("SKIPPED: embedder failed to load: {e:?}");
@@ -131,6 +132,7 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
         db_max_connections: 8,
         db_acquire_timeout_secs: 5,
         db_idle_timeout_secs: 600,
+        embedder_pool_size: 1,
     };
     let pool = match db::connect(&cfg).await {
         Ok(p) => p,

@@ -79,19 +79,11 @@ pub async fn handle(
         return Ok(row_to_output(existing, true));
     }
 
-    // Embedding is CPU-bound; hand it to spawn_blocking so we do not block
-    // the tokio worker for multi-millisecond stretches. We move `content`
-    // into the closure and return it alongside the embedding so we neither
-    // clone the string nor keep the whole `args` alive across the await.
-    let embedder_clone = embedder.clone();
-    let content_owned = args.content;
-    let (content, embedding_vec) = tokio::task::spawn_blocking(move || {
-        let emb = embedder_clone.embed(&content_owned, "store_memory");
-        (content_owned, emb)
-    })
-    .await
-    .map_err(|e| crate::error::ChittaError::Internal(format!("spawn_blocking failed: {e}")))?;
-    let embedding_vec = embedding_vec?;
+    // embed() is async and manages its own spawn_blocking internally,
+    // so we call it directly. We move content out of args to avoid
+    // cloning; embed borrows it, then we keep ownership for the insert.
+    let content = args.content;
+    let embedding_vec = embedder.embed(&content, "store_memory").await?;
 
     let now = Utc::now();
     let event_time = args.event_time.unwrap_or(now);

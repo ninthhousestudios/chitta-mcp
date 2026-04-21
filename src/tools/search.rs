@@ -96,12 +96,8 @@ pub async fn handle(
     let min_similarity = min_similarity.unwrap_or(0.0);
     validate::min_similarity(TOOL, min_similarity)?;
 
-    // Embedding off the async worker. `query` is moved into the closure —
-    // no clone.
-    let embedder_clone = embedder.clone();
-    let embedding_vec = tokio::task::spawn_blocking(move || embedder_clone.embed(&query, "search_memories"))
-        .await
-        .map_err(|e| ChittaError::Internal(format!("spawn_blocking failed: {e}")))??;
+    // embed() is async and manages its own spawn_blocking internally.
+    let embedding_vec = embedder.embed(&query, "search_memories").await?;
 
     let query_vec = Vector::from(embedding_vec);
 

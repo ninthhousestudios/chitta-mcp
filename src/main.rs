@@ -50,8 +50,12 @@ async fn main() -> Result<()> {
     let pool = db::connect(&cfg).await.context("connecting to database")?;
     db::run_migrations(&pool).await.context("running migrations")?;
 
-    let embedder = Embedder::load(&cfg.model_file(), &cfg.tokenizer_file())
-        .context("loading embedding model")?;
+    let embedder = Embedder::load(
+        &cfg.model_file(),
+        &cfg.tokenizer_file(),
+        cfg.embedder_pool_size,
+    )
+    .context("loading embedding model")?;
 
     let server = ChittaServer::new(pool, Arc::clone(&embedder));
     let (stdin, stdout) = stdio();
