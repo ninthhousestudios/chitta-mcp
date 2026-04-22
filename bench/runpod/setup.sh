@@ -161,7 +161,7 @@ if [ -d "$AMB_DIR/.venv" ] && [ ! -f "$AMB_DIR/.venv/pyvenv.cfg" ]; then
     rm -rf "$AMB_DIR/.venv"
 fi
 uv sync
-uv pip install httpx
+VIRTUAL_ENV="$AMB_DIR/.venv" uv pip install httpx
 
 # ── Write .env for AMB ──────────────────────────────────────────────
 cat > "$AMB_DIR/.env" <<EOF
