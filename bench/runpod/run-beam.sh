@@ -41,7 +41,7 @@ _reset_and_start() {
         ORT_PATH=$(grep '^ORT_DYLIB_PATH=' .env | cut -d= -f2)
         if [ -n "$ORT_PATH" ] && [ ! -f "$ORT_PATH" ]; then
             echo "WARNING: ORT_DYLIB_PATH=$ORT_PATH does not exist, re-resolving..."
-            NEW_ORT=$(find /usr/local/lib /usr/lib -name "libonnxruntime.so*" 2>/dev/null | head -1 || true)
+            NEW_ORT=$(find /usr/local/lib/onnxruntime /usr/local/lib /usr/lib -name "libonnxruntime.so*" ! -name "*providers*" 2>/dev/null | head -1 || true)
             if [ -z "$NEW_ORT" ]; then
                 echo "ERROR: Cannot find libonnxruntime.so — re-run setup.sh"
                 exit 1
