@@ -160,8 +160,8 @@ if [ -d "$AMB_DIR/.venv" ] && [ ! -f "$AMB_DIR/.venv/pyvenv.cfg" ]; then
     echo "Removing broken venv..."
     rm -rf "$AMB_DIR/.venv"
 fi
-uv sync
-VIRTUAL_ENV="$AMB_DIR/.venv" uv pip install httpx
+uv sync --inexact
+uv add httpx
 
 # ── Write .env for AMB ──────────────────────────────────────────────
 cat > "$AMB_DIR/.env" <<EOF

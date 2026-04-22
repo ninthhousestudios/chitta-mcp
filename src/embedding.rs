@@ -113,7 +113,10 @@ impl Embedder {
 
         let mut sessions = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
+            let cuda_ep = ort::execution_providers::CUDAExecutionProvider::default().build();
             let session = Session::builder()
+                .map_err(embedding_startup_err)?
+                .with_execution_providers([cuda_ep])
                 .map_err(embedding_startup_err)?
                 .with_optimization_level(GraphOptimizationLevel::Level1)
                 .map_err(embedding_startup_err)?
