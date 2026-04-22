@@ -43,6 +43,19 @@ su - postgres -c "psql -d chitta_beam -c 'CREATE EXTENSION IF NOT EXISTS vector;
 # ── Start chitta-rs (applies migrations on connect) ──────────────────
 echo "Starting chitta-rs..."
 cd "$CHITTA_DIR"
+if [ -f .env ]; then
+    ORT_PATH=$(grep '^ORT_DYLIB_PATH=' .env | cut -d= -f2)
+    if [ -n "$ORT_PATH" ] && [ ! -f "$ORT_PATH" ]; then
+        echo "WARNING: ORT_DYLIB_PATH=$ORT_PATH does not exist, re-resolving..."
+        NEW_ORT=$(find /usr/local/lib /usr/lib -name "libonnxruntime.so*" 2>/dev/null | head -1 || true)
+        if [ -z "$NEW_ORT" ]; then
+            echo "ERROR: Cannot find libonnxruntime.so — re-run setup.sh"
+            exit 1
+        fi
+        sed -i "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=$NEW_ORT|" .env
+        echo "Updated ORT_DYLIB_PATH=$NEW_ORT"
+    fi
+fi
 ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
 sleep 5
 cd "$AMB_DIR"

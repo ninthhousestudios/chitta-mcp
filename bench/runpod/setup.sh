@@ -117,13 +117,22 @@ else
 fi
 
 # ── Find ONNX runtime library ───────────────────────────────────────
-ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" 2>/dev/null | head -1 || true)
+ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/.venv/*" 2>/dev/null | head -1 || true)
 if [ -z "$ORT_LIB" ]; then
     echo "Installing onnxruntime-gpu for ORT_DYLIB_PATH..."
     pip install onnxruntime-gpu
-    ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" 2>/dev/null | head -1)
+    ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/.venv/*" 2>/dev/null | head -1)
 fi
-echo "ORT_DYLIB_PATH=$ORT_LIB"
+if [ -z "$ORT_LIB" ]; then
+    echo "ERROR: Could not find libonnxruntime.so anywhere"
+    exit 1
+fi
+# Copy to a stable location so pip/uv churn can't remove it
+ORT_STABLE="/usr/local/lib/libonnxruntime.so"
+cp "$ORT_LIB" "$ORT_STABLE"
+ldconfig
+ORT_LIB="$ORT_STABLE"
+echo "ORT_DYLIB_PATH=$ORT_LIB (copied from pip-managed location)"
 
 # ��─ Build chitta-rs ──────────────────────────────────────────────────
 cd "$CHITTA_DIR"
@@ -147,6 +156,10 @@ BEARER_TOKEN=$(cat "$TOKEN_DIR/bearer-token.txt")
 
 # ── Install AMB deps ────────────────────────────────────────────────
 cd "$AMB_DIR"
+if [ -d "$AMB_DIR/.venv" ] && [ ! -f "$AMB_DIR/.venv/pyvenv.cfg" ]; then
+    echo "Removing broken venv..."
+    rm -rf "$AMB_DIR/.venv"
+fi
 uv sync
 uv pip install httpx
 
