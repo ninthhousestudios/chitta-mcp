@@ -38,18 +38,14 @@ _reset_and_start() {
     echo "Starting chitta-rs..."
     cd "$CHITTA_DIR"
     if [ -f .env ]; then
-        ORT_PATH=$(grep '^ORT_DYLIB_PATH=' .env | cut -d= -f2)
-        if [ -n "$ORT_PATH" ] && [ ! -f "$ORT_PATH" ]; then
-            echo "WARNING: ORT_DYLIB_PATH=$ORT_PATH does not exist, re-resolving..."
-            NEW_ORT=$(find /usr/local/lib/onnxruntime /usr/local/lib /usr/lib -name "libonnxruntime.so*" ! -name "*providers*" 2>/dev/null | head -1 || true)
-            if [ -z "$NEW_ORT" ]; then
-                echo "ERROR: Cannot find libonnxruntime.so — re-run setup.sh"
-                exit 1
-            fi
-            sed -i "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=$NEW_ORT|" .env
-            echo "Updated ORT_DYLIB_PATH=$NEW_ORT"
-        fi
+        set -a; . ./.env; set +a
     fi
+    if [ -n "$ORT_DYLIB_PATH" ] && [ ! -f "$ORT_DYLIB_PATH" ]; then
+        echo "ERROR: ORT_DYLIB_PATH=$ORT_DYLIB_PATH does not exist — re-run setup.sh"
+        exit 1
+    fi
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$(dirname "$ORT_DYLIB_PATH")"
+    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
     ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
     sleep 5
     cd "$AMB_DIR"

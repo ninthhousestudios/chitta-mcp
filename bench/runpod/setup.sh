@@ -127,20 +127,10 @@ if [ -z "$ORT_LIB" ]; then
     echo "ERROR: Could not find libonnxruntime.so anywhere"
     exit 1
 fi
-# Copy all ORT shared libs to a stable location so pip/uv churn can't remove them.
-# CUDA EP needs libonnxruntime_providers_cuda.so and _providers_shared.so alongside the main lib.
-ORT_SRC_DIR=$(dirname "$ORT_LIB")
-ORT_STABLE_DIR="/usr/local/lib/onnxruntime"
-mkdir -p "$ORT_STABLE_DIR"
-cp "$ORT_SRC_DIR"/libonnxruntime*.so* "$ORT_STABLE_DIR/"
-ldconfig "$ORT_STABLE_DIR"
-ORT_LIB=$(find "$ORT_STABLE_DIR" -name "libonnxruntime.so*" ! -name "*providers*" | head -1 || true)
-if [ -z "$ORT_LIB" ]; then
-    echo "ERROR: ORT libs copied to $ORT_STABLE_DIR but main lib not found"
-    ls -la "$ORT_STABLE_DIR"
-    exit 1
-fi
-echo "ORT_DYLIB_PATH=$ORT_LIB (copied from $ORT_SRC_DIR)"
+ORT_LIB_DIR=$(dirname "$ORT_LIB")
+echo "ORT_DYLIB_PATH=$ORT_LIB"
+echo "ORT provider libs directory: $ORT_LIB_DIR"
+ls -la "$ORT_LIB_DIR"/libonnxruntime*.so* 2>/dev/null || true
 
 # ��─ Build chitta-rs ──────────────────────────────────────────────────
 cd "$CHITTA_DIR"
@@ -148,6 +138,7 @@ cd "$CHITTA_DIR"
 cat > .env <<EOF
 DATABASE_URL=postgresql://chitta:chitta@localhost/chitta_beam
 ORT_DYLIB_PATH=$ORT_LIB
+LD_LIBRARY_PATH=$ORT_LIB_DIR
 EOF
 
 echo "Building chitta-rs (release)..."
