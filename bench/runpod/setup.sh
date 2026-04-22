@@ -78,7 +78,7 @@ AMB_DIR="$WORK_DIR/agent-memory-benchmark"
 
 if [ ! -d "$CHITTA_DIR" ]; then
     git clone https://gitlab.com/ninthhouse/chitta-mcp.git "$CHITTA_DIR"
-    cd "$CHITTA_DIR" && git checkout research
+    cd "$CHITTA_DIR"
 else
     echo "chitta repo exists, pulling latest..."
     cd "$CHITTA_DIR" && git pull
@@ -96,16 +96,24 @@ pip install huggingface-hub
 MODEL_DIR="$HOME/.cache/chitta/bge-m3-onnx"
 mkdir -p "$MODEL_DIR"
 if [ ! -f "$MODEL_DIR/bge_m3_model.onnx" ]; then
-    echo "Downloading BGE-M3 dense+sparse model from HuggingFace..."
+    echo "Downloading BGE-M3 dense+sparse ONNX model from HuggingFace..."
     uv run hf download prometheus-en-croute/bge-m3-dense-sparse \
         --local-dir "$MODEL_DIR"
+    # The repo stores ONNX files inside a directory named "tokenizer.json/"
     if [ -f "$MODEL_DIR/tokenizer.json/bge_m3_model.onnx" ]; then
         mv "$MODEL_DIR/tokenizer.json/bge_m3_model.onnx" "$MODEL_DIR/bge_m3_model.onnx"
         mv "$MODEL_DIR/tokenizer.json/bge_m3_model.onnx_data" "$MODEL_DIR/bge_m3_model.onnx_data"
-        rmdir "$MODEL_DIR/tokenizer.json" 2>/dev/null || true
+        rm -rf "$MODEL_DIR/tokenizer.json" 2>/dev/null || true
     fi
 else
-    echo "BGE-M3 model already cached."
+    echo "BGE-M3 ONNX model already cached."
+fi
+if [ ! -f "$MODEL_DIR/tokenizer.json" ]; then
+    echo "Downloading BGE-M3 tokenizer.json from BAAI/bge-m3..."
+    uv run hf download BAAI/bge-m3 tokenizer.json \
+        --local-dir "$MODEL_DIR"
+else
+    echo "BGE-M3 tokenizer already cached."
 fi
 
 # ── Find ONNX runtime library ───────────────────────────────────────

@@ -7,7 +7,7 @@
 - ra-h_os (`../ra-h_os/`) — local-first knowledge graph with an intent-classified retrieval pipeline
 - OpenBrain / OB1 (`../OB1/`) — Nate B. Jones's open-protocol agent memory (PostgreSQL/Supabase, pgvector, Deno MCP). Three graph layers: manual ob-graph, auto entity-extraction, typed reasoning edges. Entity wiki synthesis. Cloud-first, LLM-at-write-time architecture.
 - Karpathy wiki concept (via OB1 video analysis) — write-time LLM synthesis into browsable wiki pages. Hybrid proposal: structured DB as source of truth, compiled wiki as derived view.
-- chitta-rs current state: hybrid RRF search (semantic + full-text), BGE-M3 1024d ONNX, pgvector HNSW, cosine similarity. Profile isolation, bi-temporal, idempotency. No graph, no LLM on write path.
+- chitta-rs current state: pure dense semantic search (BGE-M3 1024d ONNX, pgvector HNSW, cosine similarity). Profile isolation, bi-temporal, idempotency. No full-text search, no hybrid ranking, no graph, no LLM on write path.
 
 ---
 
@@ -53,14 +53,14 @@ This is the heaviest phase. Most ideas downstream depend on it.
 - Implicit-feedback edge promotion — store-despite-warning → `SimilarWeak` edge
 - Access-pattern boosting — frequently retrieved memories rank higher
 
-### Phase 4: Guardrails and diagnostics
+### Guardrails and diagnostics (ongoing, start early)
 
-**Depends on:** Phase 2 PageRank (importance rankings needed for modification guards).
+Not gated behind a phase — start as soon as there's something to guard. Items scale up as infrastructure lands:
 
-- Modification guard (PreToolUse hook, filesystem ack, TTL)
-- Blast radius / memory_impact (reverse BFS over graph)
-- Memory health diagnostics (read-only corpus health tool)
-- Hotspot composite score (PageRank × contradictions × staleness)
+- Memory health diagnostics — useful now. Read-only corpus health: counts, coverage, duplicate pairs above threshold. Grows richer as entities/edges/PageRank arrive.
+- Modification guard — start with a simple version (PreToolUse hook, confirm before delete). Full version (PageRank-aware, filesystem ack, TTL) lands once Phase 2 PageRank exists.
+- Blast radius / memory_impact — reverse BFS over graph. Needs Phase 2 edges, but the tool shell can exist earlier.
+- Hotspot composite score — needs PageRank + usage signals. Later in the sequence but not blocked on Phase 3.
 
 ### Phase 5: Compiled synthesis
 
@@ -90,7 +90,7 @@ These don't gate or depend on the phase sequence:
 
 ## Retrieval quality
 
-chitta-rs v0.0.2 ships hybrid RRF (dense semantic + full-text). The ideas below add further dimensions or tune the existing pipeline.
+chitta-rs's retrieval is a single cosine ANN pass. Every idea in this section adds a dimension the current pipeline lacks.
 
 ### Hybrid search (semantic + full-text + sparse)
 

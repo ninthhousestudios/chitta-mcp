@@ -6,9 +6,6 @@ set -euo pipefail
 #   bash run-personamem.sh [SPLIT]
 #
 # SPLIT defaults to 32k. Options: 32k, 128k, 1M
-#
-# Requires chitta-rs to be running:
-#   ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
 
 SPLIT="${1:-32k}"
 WORK_DIR="${WORK_DIR:-/workspace}"
@@ -29,20 +26,13 @@ if [ -f .env ]; then
     set +a
 fi
 
-# ── Ensure chitta-rs is running ──────────────────────────────────────
-if ! curl -sf http://127.0.0.1:3100/mcp -o /dev/null -X POST \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","id":0,"method":"ping"}' 2>/dev/null; then
-    echo "Starting chitta-rs..."
-    cd "$CHITTA_DIR"
-    ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
-    sleep 5
-    cd "$AMB_DIR"
-fi
-
 echo "=== PersonaMem $SPLIT benchmark ==="
 echo "Provider: chitta-mcp (chitta-rs HTTP)"
 echo ""
+
+# ── Stop chitta-rs so we can reset the DB ────────────────────────────
+pkill -f "chitta-rs --http" || true
+sleep 2
 
 # ── Clean DB ─────────────────────────────────────────────────────────
 echo "--- Resetting DB ---"
@@ -50,10 +40,8 @@ su - postgres -c "psql -c 'DROP DATABASE IF EXISTS chitta_beam;'"
 su - postgres -c "psql -c 'CREATE DATABASE chitta_beam OWNER chitta;'"
 su - postgres -c "psql -d chitta_beam -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
 
-# chitta-rs runs sqlx migrations on connect, so just restart it to apply schema
-echo "Restarting chitta-rs to apply migrations..."
-pkill -f "chitta-rs --http" || true
-sleep 2
+# ── Start chitta-rs (applies migrations on connect) ──────────────────
+echo "Starting chitta-rs..."
 cd "$CHITTA_DIR"
 ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
 sleep 5

@@ -6,9 +6,6 @@ set -euo pipefail
 #   bash run-beam.sh [SPLIT]
 #
 # SPLIT defaults to 100k. Options: 100k, 500k, 1m, 10m
-#
-# Requires chitta-rs to be running:
-#   ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
 
 SPLIT="${1:-100k}"
 WORK_DIR="${WORK_DIR:-/workspace}"
@@ -29,27 +26,16 @@ if [ -f .env ]; then
     set +a
 fi
 
-_start_chitta() {
-    if ! curl -sf http://127.0.0.1:3100/mcp -o /dev/null -X POST \
-        -H "Content-Type: application/json" \
-        -d '{"jsonrpc":"2.0","id":0,"method":"ping"}' 2>/dev/null; then
-        echo "Starting chitta-rs..."
-        cd "$CHITTA_DIR"
-        ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
-        sleep 5
-        cd "$AMB_DIR"
-    fi
-}
+_reset_and_start() {
+    pkill -f "chitta-rs --http" || true
+    sleep 2
 
-_reset_db() {
     echo "--- Resetting DB ---"
     su - postgres -c "psql -c 'DROP DATABASE IF EXISTS chitta_beam;'"
     su - postgres -c "psql -c 'CREATE DATABASE chitta_beam OWNER chitta;'"
     su - postgres -c "psql -d chitta_beam -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
 
-    echo "Restarting chitta-rs to apply migrations..."
-    pkill -f "chitta-rs --http" || true
-    sleep 2
+    echo "Starting chitta-rs..."
     cd "$CHITTA_DIR"
     ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
     sleep 5
@@ -60,9 +46,9 @@ echo "=== BEAM $SPLIT benchmark ==="
 echo "Provider: chitta-mcp (chitta-rs HTTP)"
 echo ""
 
-_start_chitta
-
 # ── Smoke test (2 conversations) ────────────────────────────────────
+_reset_and_start
+
 echo "--- Smoke test (--query-limit 2) ---"
 uv run omb run \
     --dataset beam \
@@ -85,7 +71,7 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # ── Clean DB for full run ────────────────────────────────────────────
-_reset_db
+_reset_and_start
 
 # ── Full run ─────────────────────────────────────────────────────────
 echo "--- Full BEAM $SPLIT run ---"
