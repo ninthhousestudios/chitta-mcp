@@ -97,7 +97,7 @@ MODEL_DIR="$HOME/.cache/chitta/bge-m3-onnx"
 mkdir -p "$MODEL_DIR"
 if [ ! -f "$MODEL_DIR/bge_m3_model.onnx" ]; then
     echo "Downloading BGE-M3 dense+sparse model from HuggingFace..."
-    huggingface-cli download prometheus-en-croute/bge-m3-dense-sparse \
+    uv run hf download prometheus-en-croute/bge-m3-dense-sparse \
         --local-dir "$MODEL_DIR"
     if [ -f "$MODEL_DIR/tokenizer.json/bge_m3_model.onnx" ]; then
         mv "$MODEL_DIR/tokenizer.json/bge_m3_model.onnx" "$MODEL_DIR/bge_m3_model.onnx"
