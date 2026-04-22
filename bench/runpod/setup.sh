@@ -121,7 +121,7 @@ ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/
 if [ -z "$ORT_LIB" ]; then
     echo "Installing onnxruntime-gpu for ORT_DYLIB_PATH..."
     pip install onnxruntime-gpu
-    ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/.venv/*" 2>/dev/null | head -1)
+    ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/.venv/*" 2>/dev/null | head -1 || true)
 fi
 if [ -z "$ORT_LIB" ]; then
     echo "ERROR: Could not find libonnxruntime.so anywhere"
@@ -134,7 +134,12 @@ ORT_STABLE_DIR="/usr/local/lib/onnxruntime"
 mkdir -p "$ORT_STABLE_DIR"
 cp "$ORT_SRC_DIR"/libonnxruntime*.so* "$ORT_STABLE_DIR/"
 ldconfig "$ORT_STABLE_DIR"
-ORT_LIB=$(find "$ORT_STABLE_DIR" -name "libonnxruntime.so*" ! -name "*providers*" | head -1)
+ORT_LIB=$(find "$ORT_STABLE_DIR" -name "libonnxruntime.so*" ! -name "*providers*" | head -1 || true)
+if [ -z "$ORT_LIB" ]; then
+    echo "ERROR: ORT libs copied to $ORT_STABLE_DIR but main lib not found"
+    ls -la "$ORT_STABLE_DIR"
+    exit 1
+fi
 echo "ORT_DYLIB_PATH=$ORT_LIB (copied from $ORT_SRC_DIR)"
 
 # ��─ Build chitta-rs ──────────────────────────────────────────────────
