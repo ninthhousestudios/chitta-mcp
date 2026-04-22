@@ -119,8 +119,9 @@ fi
 # The base image ships CPU-only onnxruntime (1.22.x) — remove it first
 # so onnxruntime-gpu's libonnxruntime.so (with CUDA EP) is the only one.
 uv pip uninstall --system onnxruntime 2>/dev/null || true
-echo "Installing onnxruntime-gpu..."
-uv pip install --system onnxruntime-gpu
+# ort 2.0.0-rc.10 binds against ORT API version 22 (i.e. ORT 1.22.x)
+echo "Installing onnxruntime-gpu 1.22..."
+uv pip install --system "onnxruntime-gpu>=1.22,<1.23"
 ORT_LIB=$(python3 -c "
 import onnxruntime, os, glob
 capi = os.path.join(os.path.dirname(onnxruntime.__file__), 'capi')
