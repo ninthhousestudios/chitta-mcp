@@ -116,15 +116,17 @@ else
 fi
 
 # ── ONNX Runtime GPU ────────────────────────────────────────────────
-# Always install onnxruntime-gpu — the base image may ship CPU-only onnxruntime
-# whose libonnxruntime.so lacks CUDA EP support entirely.
+# The base image ships CPU-only onnxruntime (1.22.x) — remove it first
+# so onnxruntime-gpu's libonnxruntime.so (with CUDA EP) is the only one.
+uv pip uninstall --system onnxruntime 2>/dev/null || true
 echo "Installing onnxruntime-gpu..."
 uv pip install --system onnxruntime-gpu
-ORT_LIB=$(find / -name "libonnxruntime.so*" -not -path "*/proc/*" -not -path "*/.venv/*" 2>/dev/null | head -1 || true)
-if [ -z "$ORT_LIB" ]; then
-    echo "ERROR: Could not find libonnxruntime.so after installing onnxruntime-gpu"
-    exit 1
-fi
+ORT_LIB=$(python3 -c "
+import onnxruntime, os, glob
+capi = os.path.join(os.path.dirname(onnxruntime.__file__), 'capi')
+libs = sorted(glob.glob(os.path.join(capi, 'libonnxruntime.so*')))
+print(libs[0])
+")
 ORT_LIB_DIR=$(dirname "$ORT_LIB")
 echo "ORT_DYLIB_PATH=$ORT_LIB"
 echo "ORT provider libs:"
