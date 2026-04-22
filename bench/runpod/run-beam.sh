@@ -46,7 +46,8 @@ _reset_and_start() {
     fi
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$(dirname "$ORT_DYLIB_PATH")"
     echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-    ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
+    RUST_LOG="${RUST_LOG:-chitta_rs=info,ort=debug}" \
+        ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
     sleep 5
     cd "$AMB_DIR"
 }
