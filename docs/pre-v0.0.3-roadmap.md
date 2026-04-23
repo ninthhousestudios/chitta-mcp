@@ -2,95 +2,79 @@
 
 chitta-rs v0.0.2 baselines: PersonaMem 32k **64.3%**, BEAM 100k **66.6%**.
 
-No features are pre-committed. The numbers decide what goes into v0.0.3.
+## What Round 1-2 experiments showed
 
-## North star update
+Three rounds of retrieval-tuning experiments (k sweep, chunk-size sweep,
+recency-weighted scoring) all moved the needle by <1pp in aggregate. The
+single-pass dense cosine pipeline is at its ceiling for these benchmarks.
 
-chitta is a **cognitive confluence system** — the place where human knowledge and
-agent capability meet. Agent-native and human-native, but separable.
-Close the laptop and chitta waits. The agent is the primary interface
-consumer; the human is the primary knowledge owner. The combination
-produces something neither could alone.
+Key findings:
+- **k sweep** (<3% lift): more results don't help — the right memories
+  aren't being found, not ranked poorly.
+- **Chunk-size sweep** (60.1–63.0%): small deltas, not the lever.
+- **Recency weighting** (w=0.05 best): +0.51pp on PersonaMem, -0.75pp on
+  BEAM. Wash. Helps temporal categories, hurts precision categories.
+  Decision gate (knowledge_update +15%, preference_evolution +10%) not met.
 
-Three layers of knowledge, each with a different home:
+Results: `bench/results/pre-v0003-tests/`.
 
-| Layer | Description | Home |
+## Failure modes (unchanged)
+
+| Root cause | Categories affected | Accuracy |
 |---|---|---|
-| Personal/experiential | Session notes, patterns, craft insights | Chitta |
-| Reference/domain | Textbook definitions, sourced claims | Separate reference DB (future) |
-| Structural/framework | Deep domain grammar, relational knowledge | Fine-tuned model (future) |
+| Single query can't capture multi-faceted needs | suggest_new_ideas, multi_session_reasoning | 26–50% |
+| No temporal/factual structure | knowledge_update, preference_evolution | 45–58% |
+| Precision gaps | information_extraction | 50–63% |
 
-v0.0.3 focuses on retrieval quality — the foundation all three layers need.
+Context token counts are identical for correct and wrong answers in both
+benchmarks. This is a context *quality* problem, not quantity.
 
-## Experiment plan
+## Next steps
 
-Three rounds. Each round's results inform whether to proceed with the next.
+### 1. Hybrid retrieval experiment (RunPod)
 
-### Round 1: adapter-only sweeps (no server changes)
+Test whether adding term-matching signals lifts accuracy beyond what
+parameter tuning couldn't. BGE-M3 already computes sparse weights in
+`src/embedding.rs` — they're currently discarded.
 
-These cost nothing but RunPod time. They tell us how much headroom exists
-without touching the server.
+**Test matrix (PersonaMem + BEAM):**
+1. Dense only (current baseline, already have numbers)
+2. Dense + sparse (enable BGE-M3 sparse output, RRF merge)
+3. Dense + FTS (add tsvector column + GIN index, RRF merge)
+4. Dense + sparse + FTS (three-way RRF, Python chitta's approach)
 
-**1a. k sweep** — `CHITTA_K=10,20,30,40` on both benchmarks.
-Targets multi_session_reasoning (42.5%), suggest_new_ideas (25.8%).
+Python chitta had RRF and also scored 64% on PersonaMem, so this may not
+move the needle either. That's a valid outcome — it tells us the problem
+is structural, not retrieval-pipeline.
 
-**1b. Chunk-size sweep** — `CHITTA_CHUNK_SIZE=256,512,1024` on PersonaMem.
-Targets PersonaMem overall accuracy.
+If any config crosses 70%, multi-query retrieval is the natural follow-up
+(targets suggest_new_ideas 26% and multi_session_reasoning 40%).
 
-**1c. Combined** — best chunk size from 1b x best k from 1a.
-Tests interaction effects.
+### 2. Agent-native quality (ships regardless of benchmark results)
 
-**Decision gate:** If k=30+ gives a meaningful lift (3%+), context assembly
-and diversity matter more than retrieval precision — pushes toward reranking.
-If k barely helps, the problem is retrieval quality itself — pushes toward
-recency weighting and graph.
+These make chitta better for real agents independent of benchmark scores:
 
-Script: `bench/runpod/run-v003-round1.sh`
+- **Error message quality** — every error includes: what the agent did,
+  why it was rejected, what to do next with a concrete example. Audit all
+  error paths.
+- **Corpus health diagnostics** — read-only tool returning counts,
+  coverage, duplicate pairs above threshold, orphan detection. Useful now,
+  grows richer as more features land.
+- **Recency weighting code** — already implemented, ships with w=0.0
+  default (no behavior change). Available for users who want it.
 
-### Round 2: targeted server-side changes (small code)
+### 3. Direction after experiments
 
-The two highest-leverage changes identified in both benchmark analyses.
-Test independently, then combined.
+If hybrid retrieval crosses 70%: v0.0.3 = hybrid pipeline + agent-native
+quality. Add multi-query retrieval if time allows.
 
-**2a. Recency-weighted scoring** — modify the SQL ranking query:
-`score = cosine * (1 + w * recency_factor)`. Sweep `w` over 0.05, 0.1, 0.2, 0.3.
-Targets knowledge_update (45%), preference_evolution (57.6%).
+If hybrid retrieval doesn't help: v0.0.3 = agent-native quality + graph
+foundation (entity extraction, supersede links, async enrichment queue).
+The benchmark failure modes need structural changes, not retrieval tuning.
 
-**2b. Recency + best k from Round 1** — combined.
+## What stays out
 
-Implementation: SQL modification using `event_time` (already stored).
-No schema change needed.
-
-**Decision gate:** If recency weighting lifts knowledge_update by 15%+ and
-preference_evolution by 10%+, it goes into v0.0.3 core. The winning weight
-`w` tells us how much temporal signal matters relative to semantic similarity.
-
-### Round 3: pick one moderate change
-
-Based on Round 1 and 2 results, pick **one** of:
-
-**3a. Cross-encoder reranking** — pick this if high-k helped in Round 1
-(good candidates exist but ranking is wrong). ONNX reranker in existing
-session pool. Targets information_extraction, general precision.
-
-**3b. Multi-query retrieval** — pick this if high-k didn't help (single
-queries don't find enough relevant memories). New server tool or adapter
-logic. Targets multi_session_reasoning, suggest_new_ideas.
-
-### What stays out
-
-- **Entity/graph extraction** — high ceiling but too large for a test round.
-  Benchmark results from Rounds 1-3 will tell us whether we need structural
-  changes or can reach 75%+ with retrieval tuning alone.
-- **BGE-M3 sparse weights** — both benchmark analyses are skeptical this
-  moves the needle on the actual failure modes. Low priority.
-- **Reference DB** — right architecture, wrong time. Aion concern, not a
-  chitta benchmark concern.
-- **Fine-tuning** — same. Important for the vision, not for v0.0.3.
-
-## Success criteria
-
-v0.0.3 ships when we have:
-1. At least one benchmark at 75%+ accuracy
-2. Clear understanding of which retrieval signals matter (temporal, diversity, precision)
-3. No regression on currently-strong categories (preference_following 95%, summarization 95%)
+- **Cross-encoder reranking** — k sweep showed ranking isn't the issue.
+- **Entity graph** — unless hybrid retrieval fails and we pivot.
+- **FSRS / learning layer** — needs graph foundation first.
+- **Compiled wiki / synthesis** — Phase 5 territory.

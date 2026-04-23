@@ -4,7 +4,7 @@
 
 - **principles.md** — foundational principles. Override convenience. Change requires its own PR.
 - **research/master-plan.md** — strategic direction, north star, capability areas.
-- **pre-v0.0.3-roadmap.md** — experiment plan for determining v0.0.3 scope.
+- **pre-v0.0.3-roadmap.md** — revised roadmap after Round 1-2 experiments. Hybrid retrieval + agent-native quality.
 - **plans/obsidian-ingestion-test.md** — test plan for Obsidian vault import as domain-knowledge benchmark.
 
 ## Benchmark analysis
@@ -36,3 +36,4 @@
 - **archived/principles-v002-agent-only.md** — principles before human-native addition.
 - **archived/starting-shape.md** — original v0.0.1 scope and schema.
 - **archived/v0.0.2-roadmap.md** — completed v0.0.2 roadmap.
+- **archived/pre-v0.0.3-roadmap-first-try.md** — original v0.0.3 experiment plan (Round 1-2 tuning). Superseded by current roadmap.
