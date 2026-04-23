@@ -2,3 +2,4 @@
 /target
 .agents/
 rust/
+*.tar.gz
