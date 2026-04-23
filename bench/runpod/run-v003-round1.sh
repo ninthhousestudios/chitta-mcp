@@ -34,6 +34,8 @@ OVERLAP_TURNS="${OVERLAP_TURNS:-1}"
 
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 export OPENBLAS_NUM_THREADS=4
+export OMB_ANSWER_LLM=gemini
+export OMB_JUDGE_LLM=gemini
 
 mkdir -p "$RESULTS_DIR"
 
