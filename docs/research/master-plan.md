@@ -4,11 +4,21 @@
 
 ## North star
 
-Build the best self-hosted agent-native persistent AI memory and learning system.
+Build the best self-hosted persistent memory and learning system for the
+confluence of human knowledge and AI capability.
+
+Chitta is a **cognitive confluence** — the place where human knowledge and
+agent capability meet. The agent is the primary interface consumer; the
+human is the primary knowledge owner. Neither is bolted onto the other.
+Both are first-class, and the combination produces something neither
+could alone. Crucially, the human can disconnect — close the laptop,
+walk away, and chitta waits. It's a place you come to, not something
+grafted onto you.
 
 - **Memory** — faithful, auditable recall. Verbatim storage, bi-temporal audit trails, no lossy enrichment at write time unless it earns its place.
 - **Learning** — the corpus gets smarter with use. Strengthening, decay, forgetting, higher-order structure.
-- **Agent-native** — the primary user is an AI agent in a bounded context window, not a human in a UI. Tool contracts, error messages, response shapes, and latency budgets are designed for agent use. Token economy is a first-class metric. If a cold-start agent can't use the tool safely, the tool is broken.
+- **Agent-native** — tool contracts, error messages, response shapes, and latency budgets are designed for agent use. Token economy is a first-class metric. If a cold-start agent can't use the tool safely, the tool is broken.
+- **Human-native** — the data belongs to the human. Knowledge graphs, views into the corpus, and the learning trajectory serve the human directly, not just through the agent. Self-hosted means the human owns and controls everything.
 
 ## Current state
 

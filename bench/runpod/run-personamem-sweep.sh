@@ -49,7 +49,16 @@ _restart_chitta() {
     pkill -f "chitta-rs --http" || true
     sleep 2
     cd "$CHITTA_DIR"
-    ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
+    if [ -f .env ]; then
+        set -a; . ./.env; set +a
+    fi
+    if [ -n "${ORT_DYLIB_PATH:-}" ] && [ ! -f "$ORT_DYLIB_PATH" ]; then
+        echo "ERROR: ORT_DYLIB_PATH=$ORT_DYLIB_PATH does not exist — re-run setup.sh"
+        exit 1
+    fi
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$(dirname "$ORT_DYLIB_PATH")"
+    RUST_LOG="${RUST_LOG:-chitta_rs=info,ort=debug}" \
+        ./target/release/chitta-rs --http --auth-token-file ~/.config/chitta/bearer-token.txt &
     sleep 5
     cd "$AMB_DIR"
 }
@@ -71,6 +80,12 @@ for CHUNK in $CHUNK_SIZES; do
     echo "------------------------------------------------------------"
     echo "[$TAG] chunk_size=$CHUNK overlap=$OVERLAP"
     echo "------------------------------------------------------------"
+
+    SRC="$AMB_DIR/outputs/personamem/chitta-mcp-sweep-$TAG/rag/${SPLIT}.json.gz"
+    if [ -f "$SRC" ]; then
+        echo "[$TAG] Result already exists — skipping (delete $SRC to re-run)"
+        continue
+    fi
 
     echo "[$TAG] resetting DB..."
     su - postgres -c "psql -c 'DROP DATABASE IF EXISTS chitta_beam;'"
