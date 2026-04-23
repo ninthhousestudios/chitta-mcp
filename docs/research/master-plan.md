@@ -44,6 +44,7 @@ These are the broad capability areas from the Python chitta research. Their prio
 - **Guardrails** — modification guards on high-value memories, blast-radius tooling
 - **Token economy** — outline/summary retrieval modes, budget-capped responses, context assembly
 - **Agent-native surface** — error-message quality, cold-start onboardability, response-shape consistency
+- **Knowledge ingestion** — importing existing knowledge (Obsidian vaults, markdown corpora) into Chitta. Guided import with curation, not blind sync. Test case: astrology Obsidian vault as a domain-knowledge profile (see `docs/plans/obsidian-ingestion-test.md`)
 
 ## What we're not doing
 

@@ -1,8 +1,8 @@
 # chitta-rs — foundational principles
 
-Reference doc. These principles override convenience. If a proposed change violates one, the change loses unless the principle is explicitly revised here first.
+Reference doc. These are the principles the rewrite is built on. They override convenience. If a proposed change violates one, the change loses unless the principle is explicitly revised here first.
 
-Chitta is a cognitive confluence — where human knowledge and agent capability meet. These principles govern how it's built.
+Scope: Rust rewrite of chitta, living in `rust/`. Python chitta is frozen — no further development on the Python tree. AMB provider stays in Python and talks to chitta-rs over MCP.
 
 ---
 
@@ -70,12 +70,6 @@ Each entry in `Cargo.toml` has a one-line comment stating what it's for and what
 
 **Rules out:** silent dependency growth. "Might as well add X." Transitive dependency bloat via convenience crates.
 
-## 11. The human owns the data
-
-Chitta is self-hosted because the knowledge inside it belongs to the human, not to a service provider. Every memory is exportable. Every derived structure (graphs, summaries, learning signals) is re-derivable from the source corpus. The human can inspect, query, and understand their own data without going through an agent. Human-readable formats, direct DB access, and knowledge views are not afterthoughts — they're part of the contract.
-
-**Rules out:** cloud-only storage. Opaque derived state that can't be explained. Features that only work through an agent interface. Lock-in by complexity.
-
 ---
 
 ## How this doc is used
@@ -86,5 +80,5 @@ Chitta is self-hosted because the knowledge inside it belongs to the human, not 
 
 ## Companion docs
 
-- `docs/research/master-plan.md` — strategic roadmap (authoritative for the *what*; this doc governs the *how*).
-- `docs/pre-v0.0.3-roadmap.md` — current experiment plan and version scope.
+- `rust/docs/starting-shape.md` — v0.0.1 scope, schema, wire contract.
+- `docs/research/master-plan.md` — strategic roadmap (still authoritative for the *what*; this doc governs the *how*).
