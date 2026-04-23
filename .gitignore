@@ -1,5 +1,6 @@
 .env
 /target
 .agents/
+.sessions/
 rust/
 *.tar.gz

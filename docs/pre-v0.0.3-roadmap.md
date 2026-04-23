@@ -6,7 +6,7 @@ No features are pre-committed. The numbers decide what goes into v0.0.3.
 
 ## North star update
 
-chitta is a **cognitive confluence** — the place where human knowledge and
+chitta is a **cognitive confluence system** — the place where human knowledge and
 agent capability meet. Agent-native and human-native, but separable.
 Close the laptop and chitta waits. The agent is the primary interface
 consumer; the human is the primary knowledge owner. The combination

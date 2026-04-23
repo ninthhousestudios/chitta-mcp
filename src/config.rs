@@ -25,6 +25,12 @@ pub struct Config {
     pub http_addr: String,
     /// HTTP listen port. Parsed from `CHITTA_HTTP_PORT`. Default `3100`.
     pub http_port: u16,
+    /// Recency weight for search scoring. `0.0` disables (pure cosine).
+    /// Parsed from `CHITTA_RECENCY_WEIGHT`. Default `0.0`.
+    pub recency_weight: f32,
+    /// Half-life in days for the recency decay curve.
+    /// Parsed from `CHITTA_RECENCY_HALF_LIFE_DAYS`. Default `30.0`.
+    pub recency_half_life_days: f32,
 }
 
 impl Config {
@@ -62,6 +68,9 @@ impl Config {
 
         let http_port: u16 = parse_env_or("CHITTA_HTTP_PORT", 3100);
 
+        let recency_weight: f32 = parse_env_or("CHITTA_RECENCY_WEIGHT", 0.0);
+        let recency_half_life_days: f32 = parse_env_or("CHITTA_RECENCY_HALF_LIFE_DAYS", 30.0);
+
         Ok(Self {
             database_url,
             model_path,
@@ -73,6 +82,8 @@ impl Config {
             query_log,
             http_addr,
             http_port,
+            recency_weight,
+            recency_half_life_days,
         })
     }
 

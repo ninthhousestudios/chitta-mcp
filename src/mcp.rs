@@ -25,12 +25,27 @@ pub struct ChittaServer {
     pool: PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
+    recency_weight: f32,
+    recency_half_life_days: f32,
     tool_router: ToolRouter<Self>,
 }
 
 impl ChittaServer {
-    pub fn new(pool: PgPool, embedder: Arc<Embedder>, query_log_enabled: bool) -> Self {
-        Self { pool, embedder, query_log_enabled, tool_router: Self::tool_router() }
+    pub fn new(
+        pool: PgPool,
+        embedder: Arc<Embedder>,
+        query_log_enabled: bool,
+        recency_weight: f32,
+        recency_half_life_days: f32,
+    ) -> Self {
+        Self {
+            pool,
+            embedder,
+            query_log_enabled,
+            recency_weight,
+            recency_half_life_days,
+            tool_router: Self::tool_router(),
+        }
     }
 }
 
@@ -79,6 +94,8 @@ impl ChittaServer {
             &self.pool,
             self.embedder.clone(),
             self.query_log_enabled,
+            self.recency_weight,
+            self.recency_half_life_days,
             args,
         )
         .await

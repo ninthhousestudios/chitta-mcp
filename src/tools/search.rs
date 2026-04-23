@@ -72,6 +72,8 @@ pub async fn handle(
     pool: &PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
+    recency_weight: f32,
+    recency_half_life_days: f32,
     args: SearchArgs,
 ) -> Result<SearchOutput> {
     let search_start = std::time::Instant::now();
@@ -107,7 +109,7 @@ pub async fn handle(
     let query_vec = Vector::from(embedding_vec);
 
     let (hits, total_available) =
-        db::search_by_embedding(pool, &profile, &query_vec, k, &tags, min_similarity).await?;
+        db::search_by_embedding(pool, &profile, &query_vec, k, &tags, min_similarity, recency_weight, recency_half_life_days).await?;
 
     let candidates: Vec<SearchHit> = hits
         .into_iter()

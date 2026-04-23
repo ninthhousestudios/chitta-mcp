@@ -113,7 +113,9 @@ async fn main() -> Result<()> {
     if cli.http {
         serve_http(cli, cfg, pool, embedder, query_log_enabled).await
     } else {
-        serve_stdio(pool, embedder, query_log_enabled).await
+        let rw = cfg.recency_weight;
+        let rh = cfg.recency_half_life_days;
+        serve_stdio(pool, embedder, query_log_enabled, rw, rh).await
     }
 }
 
@@ -122,8 +124,10 @@ async fn serve_stdio(
     pool: sqlx::PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
+    recency_weight: f32,
+    recency_half_life_days: f32,
 ) -> Result<()> {
-    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled);
+    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled, recency_weight, recency_half_life_days);
     let (stdin, stdout) = stdio();
 
     let service = server
@@ -178,6 +182,8 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
             entry.k as i64,
             &entry.tags,
             entry.min_similarity,
+            0.0,
+            30.0,
         )
         .await
         .context("re-running search")?;
@@ -280,8 +286,10 @@ async fn serve_http(
     let pool_clone = pool.clone();
     let embedder_clone = Arc::clone(&embedder);
     let ql = query_log_enabled;
+    let rw = cfg.recency_weight;
+    let rh = cfg.recency_half_life_days;
     let mcp_service = StreamableHttpService::new(
-        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql)),
+        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql, rw, rh)),
         session_manager,
         config,
     );

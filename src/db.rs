@@ -315,6 +315,8 @@ pub async fn search_by_embedding(
     k: i64,
     tags: &[String],
     min_similarity: f32,
+    recency_weight: f32,
+    recency_half_life_days: f32,
 ) -> Result<(Vec<SearchHit>, i64)> {
     // ef_search is an integer GUC; SET LOCAL does not accept bind params,
     // so we clamp to a known-safe integer range and format inline. k is
@@ -345,8 +347,13 @@ pub async fn search_by_embedding(
         .await?;
 
     // `1 - (embedding <=> $2)::real` gives cosine similarity in [0, 1] for
-    // L2-normalized vectors. We filter on it directly so HNSW still drives
-    // the ordering.
+    // L2-normalized vectors. When recency_weight > 0, we over-fetch by 2x
+    // from the HNSW index (pure cosine order), then re-rank with a temporal
+    // boost and take the top k. This lets HNSW drive the candidate set
+    // while recency influences final ordering.
+    let use_recency = recency_weight > 0.0;
+    let fetch_limit = if use_recency { k * 2 } else { k };
+
     let hits = sqlx::query_as::<_, SearchHit>(
         r#"
         select
@@ -369,9 +376,35 @@ pub async fn search_by_embedding(
     .bind(query)
     .bind(tags)
     .bind(min_similarity)
-    .bind(k)
+    .bind(fetch_limit)
     .fetch_all(&mut *tx)
     .await?;
+
+    // Re-rank with recency boost: score = cosine * (1 + w * exp(-age/half_life))
+    let hits = if use_recency {
+        let now = Utc::now();
+        let hl_secs = (recency_half_life_days as f64) * 86400.0;
+        let mut scored: Vec<(SearchHit, f32)> = hits
+            .into_iter()
+            .map(|h| {
+                let age_secs = (now - h.event_time).num_seconds().max(0) as f64;
+                let recency_factor = (-age_secs / hl_secs).exp() as f32;
+                let boosted = h.similarity * (1.0 + recency_weight * recency_factor);
+                (h, boosted)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k as usize);
+        scored
+            .into_iter()
+            .map(|(mut h, score)| {
+                h.similarity = score;
+                h
+            })
+            .collect()
+    } else {
+        hits
+    };
 
     tx.commit().await?;
     Ok((hits, total))

@@ -95,6 +95,8 @@ async fn try_shared() -> Option<SharedSetup> {
         query_log: false,
         http_addr: "127.0.0.1".into(),
         http_port: 3100,
+        recency_weight: 0.0,
+        recency_half_life_days: 30.0,
     };
 
     if !cfg.model_file().is_file() || !cfg.tokenizer_file().is_file() {
@@ -141,6 +143,8 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
         query_log: false,
         http_addr: "127.0.0.1".into(),
         http_port: 3100,
+        recency_weight: 0.0,
+        recency_half_life_days: 30.0,
     };
     let pool = match db::connect(&cfg).await {
         Ok(p) => p,
@@ -247,6 +251,8 @@ async fn search_envelope_has_four_fields_on_empty_profile() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile: h.profile.clone(),
             query: "nothing will match".into(),
@@ -295,6 +301,8 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "quick fox".into(),
@@ -390,6 +398,8 @@ async fn search_snippet_is_verbatim_prefix() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "alpha".into(),
@@ -434,6 +444,8 @@ async fn profile_isolation_keeps_searches_scoped() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile: profile_b,
             query: "zebra".into(),
@@ -546,6 +558,8 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "postgres pool tuning".into(),
@@ -891,6 +905,8 @@ async fn search_with_tag_filter_returns_only_matching() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "async programming".into(),
@@ -938,6 +954,8 @@ async fn search_with_min_similarity_filters_low_scores() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "French cooking recipes with butter and garlic".into(),
@@ -984,6 +1002,8 @@ async fn truncated_false_when_all_results_fit() {
         &h.pool,
         h.embedder.clone(),
         false,
+        0.0,
+        30.0,
         SearchArgs {
             profile,
             query: "truncation regression".into(),
