@@ -21,6 +21,7 @@ pub struct HealthArgs {}
 #[derive(Debug, Serialize)]
 pub struct HealthOutput {
     pub status: &'static str,
+    pub retrieval_legs: Vec<&'static str>,
     pub db_connected: bool,
     pub embedder_ok: bool,
     pub embedder_pool_size: usize,
@@ -28,7 +29,7 @@ pub struct HealthOutput {
 }
 
 #[tracing::instrument(name = "tool.health_check", skip(pool, embedder))]
-pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>) -> Result<HealthOutput> {
+pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>, rrf_fts: bool, rrf_sparse: bool) -> Result<HealthOutput> {
     let db_connected = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(pool)
         .await
@@ -38,8 +39,13 @@ pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>) -> Result<HealthOutp
 
     let all_ok = db_connected && embedder_ok;
 
+    let mut legs = vec!["dense"];
+    if rrf_fts { legs.push("fts"); }
+    if rrf_sparse { legs.push("sparse"); }
+
     Ok(HealthOutput {
         status: if all_ok { "ok" } else { "degraded" },
+        retrieval_legs: legs,
         db_connected,
         embedder_ok,
         embedder_pool_size: embedder.pool_size(),

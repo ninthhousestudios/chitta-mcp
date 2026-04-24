@@ -49,6 +49,12 @@ enum Commands {
         #[arg(long, default_value = "100")]
         limit: i64,
     },
+    /// Backfill sparse embeddings for rows that have none.
+    Backfill {
+        /// Batch size for processing.
+        #[arg(long, default_value = "100")]
+        batch_size: i64,
+    },
 }
 
 #[tokio::main]
@@ -59,6 +65,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Commands::Replay { profile, limit }) => return run_replay(profile, limit).await,
+        Some(Commands::Backfill { batch_size }) => return run_backfill(batch_size).await,
         Some(Commands::Serve) | None => {}
     }
 
@@ -107,6 +114,7 @@ async fn main() -> Result<()> {
         &cfg.model_file(),
         &cfg.tokenizer_file(),
         cfg.embedder_pool_size,
+        cfg.sparse_threshold,
     )
     .context("loading embedding model")?;
 
@@ -115,7 +123,11 @@ async fn main() -> Result<()> {
     } else {
         let rw = cfg.recency_weight;
         let rh = cfg.recency_half_life_days;
-        serve_stdio(pool, embedder, query_log_enabled, rw, rh).await
+        let rrf_fts = cfg.rrf_fts;
+        let rrf_sparse = cfg.rrf_sparse;
+        let rrf_k = cfg.rrf_k;
+        let rrf_candidates = cfg.rrf_candidates;
+        serve_stdio(pool, embedder, query_log_enabled, rw, rh, rrf_fts, rrf_sparse, rrf_k, rrf_candidates).await
     }
 }
 
@@ -126,8 +138,12 @@ async fn serve_stdio(
     query_log_enabled: bool,
     recency_weight: f32,
     recency_half_life_days: f32,
+    rrf_fts: bool,
+    rrf_sparse: bool,
+    rrf_k: u32,
+    rrf_candidates: i64,
 ) -> Result<()> {
-    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled, recency_weight, recency_half_life_days);
+    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled, recency_weight, recency_half_life_days, rrf_fts, rrf_sparse, rrf_k, rrf_candidates);
     let (stdin, stdout) = stdio();
 
     let service = server
@@ -238,6 +254,73 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
     Ok(())
 }
 
+async fn run_backfill(batch_size: i64) -> Result<()> {
+    let cfg = Config::from_env().context("loading configuration from environment")?;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .with_writer(std::io::stderr)
+        .init();
+
+    let pool = db::connect(&cfg).await.context("connecting to database")?;
+    db::run_migrations(&pool).await.context("running migrations")?;
+
+    let embedder = Embedder::load(
+        &cfg.model_file(),
+        &cfg.tokenizer_file(),
+        cfg.embedder_pool_size,
+        cfg.sparse_threshold,
+    )
+    .context("loading embedding model")?;
+
+    let mut total = 0u64;
+    loop {
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            r#"
+            SELECT id, content FROM memories
+            WHERE sparse_embedding IS NULL
+            ORDER BY id
+            LIMIT $1
+            "#,
+        )
+        .bind(batch_size)
+        .fetch_all(&pool)
+        .await
+        .context("fetching rows to backfill")?;
+
+        if rows.is_empty() {
+            break;
+        }
+
+        let batch_len = rows.len();
+        for (id, content) in rows {
+            let embed_out = embedder
+                .embed_full(&content, "backfill")
+                .await
+                .context("embedding for backfill")?;
+            let sparse_json = serde_json::to_value(&embed_out.sparse)
+                .context("serializing sparse embedding")?;
+
+            sqlx::query("UPDATE memories SET sparse_embedding = $1 WHERE id = $2")
+                .bind(&sparse_json)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .context("updating sparse_embedding")?;
+        }
+
+        total += batch_len as u64;
+        tracing::info!(batch = batch_len, total, "backfill batch complete");
+
+        if (batch_len as i64) < batch_size {
+            break;
+        }
+    }
+
+    println!("Backfill complete: {total} rows updated");
+    Ok(())
+}
+
 /// Streamable HTTP transport with bearer-token auth.
 async fn serve_http(
     cli: Cli,
@@ -288,8 +371,12 @@ async fn serve_http(
     let ql = query_log_enabled;
     let rw = cfg.recency_weight;
     let rh = cfg.recency_half_life_days;
+    let rrf_fts = cfg.rrf_fts;
+    let rrf_sparse = cfg.rrf_sparse;
+    let rrf_k = cfg.rrf_k;
+    let rrf_candidates = cfg.rrf_candidates;
     let mcp_service = StreamableHttpService::new(
-        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql, rw, rh)),
+        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql, rw, rh, rrf_fts, rrf_sparse, rrf_k, rrf_candidates)),
         session_manager,
         config,
     );

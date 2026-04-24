@@ -27,6 +27,10 @@ pub struct ChittaServer {
     query_log_enabled: bool,
     recency_weight: f32,
     recency_half_life_days: f32,
+    rrf_fts: bool,
+    rrf_sparse: bool,
+    rrf_k: u32,
+    rrf_candidates: i64,
     tool_router: ToolRouter<Self>,
 }
 
@@ -37,6 +41,10 @@ impl ChittaServer {
         query_log_enabled: bool,
         recency_weight: f32,
         recency_half_life_days: f32,
+        rrf_fts: bool,
+        rrf_sparse: bool,
+        rrf_k: u32,
+        rrf_candidates: i64,
     ) -> Self {
         Self {
             pool,
@@ -44,6 +52,10 @@ impl ChittaServer {
             query_log_enabled,
             recency_weight,
             recency_half_life_days,
+            rrf_fts,
+            rrf_sparse,
+            rrf_k,
+            rrf_candidates,
             tool_router: Self::tool_router(),
         }
     }
@@ -96,6 +108,10 @@ impl ChittaServer {
             self.query_log_enabled,
             self.recency_weight,
             self.recency_half_life_days,
+            self.rrf_fts,
+            self.rrf_sparse,
+            self.rrf_k,
+            self.rrf_candidates,
             args,
         )
         .await
@@ -155,7 +171,7 @@ impl ChittaServer {
         &self,
         Parameters(_args): Parameters<tools::HealthArgs>,
     ) -> Result<String, ErrorData> {
-        let out = tools::health::handle(&self.pool, self.embedder.clone())
+        let out = tools::health::handle(&self.pool, self.embedder.clone(), self.rrf_fts, self.rrf_sparse)
             .await
             .map_err(chitta_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)

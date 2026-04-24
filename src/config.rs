@@ -31,6 +31,11 @@ pub struct Config {
     /// Half-life in days for the recency decay curve.
     /// Parsed from `CHITTA_RECENCY_HALF_LIFE_DAYS`. Default `30.0`.
     pub recency_half_life_days: f32,
+    pub rrf_fts: bool,
+    pub rrf_sparse: bool,
+    pub rrf_k: u32,
+    pub rrf_candidates: i64,
+    pub sparse_threshold: f32,
 }
 
 impl Config {
@@ -71,6 +76,20 @@ impl Config {
         let recency_weight: f32 = parse_env_or("CHITTA_RECENCY_WEIGHT", 0.0);
         let recency_half_life_days: f32 = parse_env_or("CHITTA_RECENCY_HALF_LIFE_DAYS", 30.0);
 
+        let rrf_fts: bool = parse_env_or("CHITTA_RRF_FTS", false);
+        let rrf_sparse: bool = parse_env_or("CHITTA_RRF_SPARSE", false);
+        let rrf_k: u32 = parse_env_or("CHITTA_RRF_K", 60);
+        let rrf_candidates: i64 = parse_env_or("CHITTA_RRF_CANDIDATES", 2);
+        let sparse_threshold: f32 = parse_env_or("CHITTA_SPARSE_THRESHOLD", 0.01);
+
+        if rrf_sparse && !rrf_fts {
+            tracing::warn!(
+                "CHITTA_RRF_SPARSE=true without CHITTA_RRF_FTS=true; \
+                 sparse is a re-ranker and needs at least one index-backed leg — \
+                 dense is always on, so this is fine but FTS would add recall"
+            );
+        }
+
         Ok(Self {
             database_url,
             model_path,
@@ -84,6 +103,11 @@ impl Config {
             http_port,
             recency_weight,
             recency_half_life_days,
+            rrf_fts,
+            rrf_sparse,
+            rrf_k,
+            rrf_candidates,
+            sparse_threshold,
         })
     }
 

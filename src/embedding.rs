@@ -32,9 +32,10 @@
 //! The `sparse_weights` output is ignored in v0.0.1 (no sparse column in the
 //! starting shape).
 
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use ndarray::Array2;
@@ -44,6 +45,13 @@ use tokenizers::Tokenizer;
 use tokio::sync::Semaphore;
 
 use crate::error::{ChittaError, Result};
+
+pub struct EmbedOutput {
+    pub dense: Vec<f32>,
+    pub sparse: HashMap<u32, f32>,
+}
+
+static SPARSE_MISSING_WARN: Once = Once::new();
 
 /// Dimension of BGE-M3's dense output. Pinned here so a dimension drift
 /// shows up as a loud panic in tests rather than a silent write.
@@ -69,6 +77,7 @@ pub struct Embedder {
     model_path: PathBuf,
     #[allow(dead_code)]
     tokenizer_path: PathBuf,
+    sparse_threshold: f32,
 }
 
 impl Embedder {
@@ -82,6 +91,7 @@ impl Embedder {
         model_path: &Path,
         tokenizer_path: &Path,
         pool_size: usize,
+        sparse_threshold: f32,
     ) -> Result<Arc<Self>> {
         assert!(pool_size >= 1, "embedder pool_size must be >= 1");
 
@@ -140,6 +150,7 @@ impl Embedder {
             semaphore: Semaphore::new(pool_size),
             model_path: model_path.to_path_buf(),
             tokenizer_path: tokenizer_path.to_path_buf(),
+            sparse_threshold,
         }))
     }
 
@@ -152,6 +163,10 @@ impl Embedder {
     /// Takes `self: &Arc<Self>` so we can clone the Arc into the
     /// `spawn_blocking` closure (which requires `Send + 'static`).
     pub async fn embed(self: &Arc<Self>, text: &str, tool: &'static str) -> Result<Vec<f32>> {
+        Ok(self.embed_full(text, tool).await?.dense)
+    }
+
+    pub async fn embed_full(self: &Arc<Self>, text: &str, tool: &'static str) -> Result<EmbedOutput> {
         // 1. Tokenize (fast, sync — no lock needed).
         let encoding = self
             .tokenizer
@@ -177,6 +192,7 @@ impl Embedder {
 
         // 2. Build input tensors (fast, sync).
         let seq_len = ids.len();
+        let token_ids: Vec<u32> = ids.to_vec();
         let input_ids: Vec<i64> = ids.iter().map(|&id| id as i64).collect();
         let attention_mask: Vec<i64> = attn.iter().map(|&m| m as i64).collect();
 
@@ -206,6 +222,7 @@ impl Embedder {
         //    is created and consumed entirely within the blocking closure —
         //    it never crosses an .await point.
         let embedder = Arc::clone(self);
+        let sparse_threshold = self.sparse_threshold;
 
         // Returns (inference_result, panicked). The `panicked` flag tells the
         // async context to replace the session slot before propagating the error.
@@ -247,7 +264,7 @@ impl Embedder {
                         false,
                     ),
                     Ok(Ok(outputs)) => {
-                        let dense_result = (|| {
+                        let embed_result = (|| {
                             let dense = outputs
                                 .get("dense_embeddings")
                                 .ok_or_else(|| ChittaError::Embedding {
@@ -277,9 +294,50 @@ impl Embedder {
                                 });
                             }
 
-                            Ok(data.to_vec())
+                            let dense_vec = data.to_vec();
+
+                            // Extract sparse lexical weights: shape [1, seq_len, 1].
+                            let sparse = match outputs.get("sparse_weights") {
+                                Some(sw) => {
+                                    match sw.try_extract_tensor::<f32>() {
+                                        Ok((_shape, weights)) => {
+                                            let mut map: HashMap<u32, f32> = HashMap::new();
+                                            for (pos, &token_id) in token_ids.iter().enumerate() {
+                                                let w = weights[pos];
+                                                if w >= sparse_threshold {
+                                                    let entry = map.entry(token_id).or_insert(0.0_f32);
+                                                    if w > *entry {
+                                                        *entry = w;
+                                                    }
+                                                }
+                                            }
+                                            map
+                                        }
+                                        Err(e) => {
+                                            SPARSE_MISSING_WARN.call_once(|| {
+                                                tracing::warn!(
+                                                    "sparse_weights output exists but extraction failed: {e}; \
+                                                     sparse embeddings will be empty"
+                                                );
+                                            });
+                                            HashMap::new()
+                                        }
+                                    }
+                                }
+                                None => {
+                                    SPARSE_MISSING_WARN.call_once(|| {
+                                        tracing::warn!(
+                                            "ONNX model has no `sparse_weights` output; \
+                                             sparse embeddings will be empty"
+                                        );
+                                    });
+                                    HashMap::new()
+                                }
+                            };
+
+                            Ok(EmbedOutput { dense: dense_vec, sparse })
                         })();
-                        (dense_result, false)
+                        (embed_result, false)
                     }
                 }
             },

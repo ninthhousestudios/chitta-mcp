@@ -97,6 +97,11 @@ async fn try_shared() -> Option<SharedSetup> {
         http_port: 3100,
         recency_weight: 0.0,
         recency_half_life_days: 30.0,
+        rrf_fts: false,
+        rrf_sparse: false,
+        rrf_k: 60,
+        rrf_candidates: 2,
+        sparse_threshold: 0.01,
     };
 
     if !cfg.model_file().is_file() || !cfg.tokenizer_file().is_file() {
@@ -119,7 +124,7 @@ async fn try_shared() -> Option<SharedSetup> {
     }
     drop(bootstrap_pool);
 
-    let embedder = match Embedder::load(&cfg.model_file(), &cfg.tokenizer_file(), 1) {
+    let embedder = match Embedder::load(&cfg.model_file(), &cfg.tokenizer_file(), 1, 0.01) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("SKIPPED: embedder failed to load: {e:?}");
@@ -145,6 +150,11 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
         http_port: 3100,
         recency_weight: 0.0,
         recency_half_life_days: 30.0,
+        rrf_fts: false,
+        rrf_sparse: false,
+        rrf_k: 60,
+        rrf_candidates: 2,
+        sparse_threshold: 0.01,
     };
     let pool = match db::connect(&cfg).await {
         Ok(p) => p,
@@ -253,6 +263,10 @@ async fn search_envelope_has_four_fields_on_empty_profile() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile: h.profile.clone(),
             query: "nothing will match".into(),
@@ -303,6 +317,10 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "quick fox".into(),
@@ -400,6 +418,10 @@ async fn search_snippet_is_verbatim_prefix() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "alpha".into(),
@@ -446,6 +468,10 @@ async fn profile_isolation_keeps_searches_scoped() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile: profile_b,
             query: "zebra".into(),
@@ -560,6 +586,10 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "postgres pool tuning".into(),
@@ -907,6 +937,10 @@ async fn search_with_tag_filter_returns_only_matching() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "async programming".into(),
@@ -956,6 +990,10 @@ async fn search_with_min_similarity_filters_low_scores() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "French cooking recipes with butter and garlic".into(),
@@ -1004,6 +1042,10 @@ async fn truncated_false_when_all_results_fit() {
         false,
         0.0,
         30.0,
+        false,
+        false,
+        60,
+        2,
         SearchArgs {
             profile,
             query: "truncation regression".into(),

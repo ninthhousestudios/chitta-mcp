@@ -4,6 +4,8 @@
 //! can `cargo build` without a live database — rationale in
 //! `docs/starting-shape.md` § sqlx mode.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use pgvector::Vector;
 use sqlx::FromRow;
@@ -26,6 +28,7 @@ pub struct MemoryRow {
     pub idempotency_key: String,
     pub source: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    pub sparse_embedding: Option<serde_json::Value>,
 }
 
 /// One hit from an ANN search. Similarity is `1 - cosine_distance`.
@@ -70,9 +73,9 @@ pub async fn insert_or_fetch_memory(
     let insert_result = sqlx::query_as::<_, MemoryRow>(
         r#"
         insert into memories
-            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         "#,
     )
     .bind(new.id)
@@ -85,6 +88,7 @@ pub async fn insert_or_fetch_memory(
     .bind(&new.idempotency_key)
     .bind(&new.source)
     .bind(&new.metadata)
+    .bind(&new.sparse_embedding)
     .fetch_one(pool)
     .await;
 
@@ -122,7 +126,7 @@ pub async fn find_by_idempotency_key(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         from memories
         where profile = $1 and idempotency_key = $2
         "#,
@@ -141,7 +145,7 @@ pub async fn get_memory_by_id(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         from memories
         where profile = $1 and id = $2
         "#,
@@ -168,17 +172,19 @@ pub async fn update_memory(
     tags: Option<&[String]>,
     source: Option<&str>,
     metadata: Option<&serde_json::Value>,
+    sparse_embedding: Option<&serde_json::Value>,
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
         UPDATE memories
-        SET content   = COALESCE($3, content),
-            embedding = COALESCE($4, embedding),
-            tags      = COALESCE($5, tags),
-            source    = COALESCE($6, source),
-            metadata  = COALESCE($7, metadata)
+        SET content          = COALESCE($3, content),
+            embedding        = COALESCE($4, embedding),
+            tags             = COALESCE($5, tags),
+            source           = COALESCE($6, source),
+            metadata         = COALESCE($7, metadata),
+            sparse_embedding = COALESCE($8, sparse_embedding)
         WHERE profile = $1 AND id = $2
-        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         "#,
     )
     .bind(profile)
@@ -188,6 +194,7 @@ pub async fn update_memory(
     .bind(tags)
     .bind(source)
     .bind(metadata)
+    .bind(sparse_embedding)
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -218,7 +225,7 @@ pub async fn list_recent(
 ) -> Result<Vec<MemoryRow>> {
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
@@ -258,7 +265,7 @@ pub async fn list_recent_with_count(
 
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
@@ -408,6 +415,87 @@ pub async fn search_by_embedding(
 
     tx.commit().await?;
     Ok((hits, total))
+}
+
+pub async fn search_by_fts(
+    pool: &PgPool,
+    profile: &str,
+    query_text: &str,
+    limit: i64,
+    tags: &[String],
+) -> Result<Vec<Uuid>> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT id
+        FROM memories
+        WHERE profile = $1
+          AND content_tsvector @@ plainto_tsquery('english', $2)
+          AND ($4::text[] = '{}' OR tags && $4)
+        ORDER BY ts_rank(content_tsvector, plainto_tsquery('english', $2)) DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(profile)
+    .bind(query_text)
+    .bind(limit)
+    .bind(tags)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+pub async fn fetch_sparse_embeddings(
+    pool: &PgPool,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, HashMap<u32, f32>)>> {
+    let rows: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        r#"
+        SELECT id, sparse_embedding
+        FROM memories
+        WHERE id = ANY($1)
+          AND sparse_embedding IS NOT NULL
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut result = Vec::with_capacity(rows.len());
+    for (id, json) in rows {
+        let map: HashMap<u32, f32> = serde_json::from_value(json).unwrap_or_default();
+        result.push((id, map));
+    }
+    Ok(result)
+}
+
+pub async fn fetch_search_hits_by_ids(
+    pool: &PgPool,
+    profile: &str,
+    ids: &[Uuid],
+) -> Result<Vec<SearchHit>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let rows = sqlx::query_as::<_, SearchHit>(
+        r#"
+        SELECT id, content, event_time, record_time, tags, source,
+               1.0::real AS similarity
+        FROM memories
+        WHERE profile = $1
+          AND id = ANY($2)
+        "#,
+    )
+    .bind(profile)
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+
+    // Preserve the ordering of the input IDs (RRF rank order).
+    let pos: HashMap<Uuid, usize> = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let mut sorted = rows;
+    sorted.sort_by_key(|h| pos.get(&h.id).copied().unwrap_or(usize::MAX));
+    Ok(sorted)
 }
 
 /// One row from the `query_log` table. Used by the replay subcommand.

@@ -9,4 +9,5 @@ pub mod embedding;
 pub mod envelope;
 pub mod error;
 pub mod mcp;
+pub mod retrieval;
 pub mod tools;

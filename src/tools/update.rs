@@ -87,12 +87,14 @@ pub async fn handle(
         validate::tags(TOOL, tags)?;
     }
 
-    // If content changed, re-embed.
-    let (embedding, re_embedded) = if let Some(ref content) = args.content {
-        let embedding_vec = embedder.embed(content, TOOL).await?;
-        (Some(Vector::from(embedding_vec)), true)
+    // If content changed, re-embed (both dense and sparse).
+    let (embedding, sparse_embedding, re_embedded) = if let Some(ref content) = args.content {
+        let embed_out = embedder.embed_full(content, TOOL).await?;
+        let sparse_json = serde_json::to_value(&embed_out.sparse)
+            .map_err(|e| ChittaError::Internal(format!("failed to serialize sparse embedding: {e}")))?;
+        (Some(Vector::from(embed_out.dense)), Some(sparse_json), true)
     } else {
-        (None, false)
+        (None, None, false)
     };
 
     let row = db::update_memory(
@@ -104,6 +106,7 @@ pub async fn handle(
         args.tags.as_deref(),
         args.source.as_deref(),
         args.metadata.as_ref(),
+        sparse_embedding.as_ref(),
     )
     .await?
     .ok_or_else(|| ChittaError::NotFound {

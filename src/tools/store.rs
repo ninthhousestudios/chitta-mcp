@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::db::{self, MemoryRow};
 use crate::embedding::Embedder;
-use crate::error::Result;
+use crate::error::{ChittaError, Result};
 use crate::tools::validate;
 
 const TOOL: &str = "store_memory";
@@ -94,7 +94,9 @@ pub async fn handle(
     // so we call it directly. We move content out of args to avoid
     // cloning; embed borrows it, then we keep ownership for the insert.
     let content = args.content;
-    let embedding_vec = embedder.embed(&content, "store_memory").await?;
+    let embed_out = embedder.embed_full(&content, "store_memory").await?;
+    let sparse_json = serde_json::to_value(&embed_out.sparse)
+        .map_err(|e| ChittaError::Internal(format!("failed to serialize sparse embedding: {e}")))?;
 
     let now = Utc::now();
     let event_time = args.event_time.unwrap_or(now);
@@ -102,13 +104,14 @@ pub async fn handle(
         id: Uuid::now_v7(),
         profile: args.profile,
         content,
-        embedding: Vector::from(embedding_vec),
+        embedding: Vector::from(embed_out.dense),
         event_time,
         record_time: now,
         tags,
         idempotency_key: args.idempotency_key,
         source: args.source,
         metadata: args.metadata,
+        sparse_embedding: Some(sparse_json),
     };
 
     let (stored, replayed) = db::insert_or_fetch_memory(pool, &row).await?;
