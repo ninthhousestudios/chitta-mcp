@@ -2,22 +2,24 @@
 
 ## Pick up
 
-- **Revised pre-v0.0.3 roadmap is written.** Round 1-2 experiments (k, chunk size, recency weight) showed parameter tuning is at ceiling. New plan: hybrid retrieval experiment + agent-native quality.
-- **Hybrid retrieval experiment needs implementation.** Enable BGE-M3 sparse weights (currently discarded in `src/embedding.rs`), add FTS/tsvector, build RRF merge. Test matrix: dense-only (have baseline), dense+sparse, dense+FTS, dense+sparse+FTS. Need a RunPod script.
-- **BEAM script ready but not yet used.** `bench/runpod/run-v003-beam.sh` runs BEAM at w=0.0 and w=0.05. Written this session but the BEAM runs were done with a different script/naming (`100k-rw000.json`, `100k-rw0005.json`).
+- **Run retrieval-only sweeps on RunPod.** RRF implementation is complete (commit c06f3aa). Build the release binary (`cargo build --release`) and run:
+  ```bash
+  bash bench/runpod/run-retrieval-sweep.sh personamem 32k
+  ```
+  Seven configs: dense-only, dense-fts, dense-sparse, dense-fts-sparse, rrf-k20, rrf-k60, rrf-k120. Compare MRR/recall/precision across combos.
+
+- **Backfill existing databases.** If running against a DB with pre-existing data (not fresh sweep), run the backfill first:
+  ```bash
+  chitta-rs backfill
+  ```
+  This populates `sparse_embedding` for rows that pre-date migration 0004. The tsvector column is auto-maintained by Postgres (GENERATED ALWAYS).
+
+- **After sweep results:** If hybrid retrieval moves the needle, pick the best config combo and make it the default. If not, the per-category drags (suggest_new_ideas 26%, multi_session_reasoning 40%, knowledge_update 45%) point toward graph/entity work as the next lever.
 
 ## Context
 
-- Round 1-2 results in `bench/results/pre-v0003-tests/`. PersonaMem rw sweep: w=0.05 best at 64.18%, control 63.67%. BEAM: control 65.38%, w=0.05 64.63%. Recency weighting is a wash.
-- Per-category breakdown: suggest_new_ideas (26%), multi_session_reasoning (40%), knowledge_update (45%) are the real drags. These need structural fixes, not tuning.
-- Python chitta had RRF and scored 64% on PersonaMem — so hybrid retrieval may also not help. That's a valid outcome that would point toward graph/entity work for v0.0.3.
-- Recency weighting code is in chitta-rs (config.rs, db.rs, mcp.rs, search.rs) with w=0.0 default. No behavior change, ships as-is.
-
-## Uncommitted changes
-
-- `docs/pre-v0.0.3-roadmap.md` — new roadmap
-- `docs/index.md` — updated manifest
-- `docs/archived/pre-v0.0.3-roadmap-first-try.md` — Josh moved the old roadmap here
-- `bench/runpod/run-v003-beam.sh` — beam-only script (new)
-- Recency weighting Rust code from prior session (config.rs, db.rs, mcp.rs, main.rs, tools/search.rs)
-- Benchmark result files in `bench/results/pre-v0003-tests/`
+- RRF implementation: plan at `.agents/plans/2026-04-23-rrf-hybrid-retrieval.md`, pre-mortem at `.agents/council/2026-04-23-pre-mortem-rrf-hybrid-retrieval.md`.
+- ONNX `sparse_weights` shape verified: `[batch, seq_len, 1]`. Extraction zips token IDs with per-position weights, thresholds at `CHITTA_SPARSE_THRESHOLD` (default 0.01), dedupes by max weight per token ID.
+- Zero-overhead path: when `CHITTA_RRF_FTS=false` and `CHITTA_RRF_SPARSE=false` (defaults), behavior is identical to v0.0.2 — no regression risk.
+- Clippy `too_many_arguments` warnings on search_hybrid (13 args), search::handle (10 args), ChittaServer::new (10 args). Could group RRF params into a struct if this bothers — plan chose individual flags for sweep composability.
+- Round 1-2 dense cosine + recency tuning at ceiling (~64% PersonaMem). Python chitta's RRF scored 64% — hybrid may not move the number, but systematic testing will confirm.
