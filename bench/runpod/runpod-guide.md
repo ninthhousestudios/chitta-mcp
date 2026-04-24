@@ -25,7 +25,9 @@ Setup installs: postgres + pgvector, Rust toolchain, uv, both repos (chitta + AM
 
 ## Run benchmarks
 
-chitta-rs runs as a background HTTP server. The run scripts auto-start it if needed.
+chitta-rs runs as a background HTTP server. The run scripts handle DB reset, server start, and eval automatically.
+
+### Full evals (LLM-judged, costs Gemini credits)
 
 ```bash
 # PersonaMem 32k (small, fast, good smoke test)
@@ -44,6 +46,44 @@ bash bench/runpod/run-beam.sh 1m
 # Chunk-size sweep
 bash bench/runpod/run-personamem-sweep.sh 32k 50
 ```
+
+### Retrieval-only evals (zero LLM cost)
+
+These measure retrieval quality (hit rate, recall, MRR) without calling an LLM judge. Fast and free.
+
+```bash
+# Dense-only baselines
+bash bench/runpod/run-retrieval-personamem.sh 32k
+bash bench/runpod/run-retrieval-beam.sh 100k
+
+# Limit queries for a quick spot-check
+bash bench/runpod/run-retrieval-beam.sh 100k 50
+```
+
+### RRF hybrid retrieval sweep
+
+Compares dense-only vs hybrid (FTS, sparse, both) across multiple configs. Resets the DB and restarts chitta-rs for each config so results are independent.
+
+```bash
+# Default: personamem 32k
+bash bench/runpod/run-retrieval-sweep.sh
+
+# BEAM 100k
+bash bench/runpod/run-retrieval-sweep.sh beam 100k
+```
+
+Edit the `CONFIGS` array in the sweep script to add/remove configs. Each entry is `"RUN_NAME:ENV_VAR=VALUE ENV_VAR=VALUE ..."`. RRF-related env vars are unset between iterations so configs don't leak into each other.
+
+Available RRF env vars:
+
+| Var | Default | Description |
+|-----|---------|-------------|
+| `CHITTA_RRF_FTS` | `false` | Enable FTS leg |
+| `CHITTA_RRF_SPARSE` | `false` | Enable sparse re-ranking leg |
+| `CHITTA_RRF_K` | `60` | RRF constant (higher = less weight to top ranks) |
+| `CHITTA_RRF_CANDIDATES` | `5` | Fetch multiplier per leg (`k * candidates`) |
+
+Results are saved per-config under `outputs/<dataset>/<run-name>/retrieval/<split>.json`, with the full RRF config recorded in each result file.
 
 ## Architecture difference from Python chitta
 
