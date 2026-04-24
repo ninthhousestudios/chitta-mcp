@@ -121,13 +121,7 @@ async fn main() -> Result<()> {
     if cli.http {
         serve_http(cli, cfg, pool, embedder, query_log_enabled).await
     } else {
-        let rw = cfg.recency_weight;
-        let rh = cfg.recency_half_life_days;
-        let rrf_fts = cfg.rrf_fts;
-        let rrf_sparse = cfg.rrf_sparse;
-        let rrf_k = cfg.rrf_k;
-        let rrf_candidates = cfg.rrf_candidates;
-        serve_stdio(pool, embedder, query_log_enabled, rw, rh, rrf_fts, rrf_sparse, rrf_k, rrf_candidates).await
+        serve_stdio(pool, embedder, query_log_enabled, cfg.search).await
     }
 }
 
@@ -136,14 +130,9 @@ async fn serve_stdio(
     pool: sqlx::PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
-    recency_weight: f32,
-    recency_half_life_days: f32,
-    rrf_fts: bool,
-    rrf_sparse: bool,
-    rrf_k: u32,
-    rrf_candidates: i64,
+    search_cfg: chitta_rs::config::SearchConfig,
 ) -> Result<()> {
-    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled, recency_weight, recency_half_life_days, rrf_fts, rrf_sparse, rrf_k, rrf_candidates);
+    let server = ChittaServer::new(pool, Arc::clone(&embedder), query_log_enabled, search_cfg);
     let (stdin, stdout) = stdio();
 
     let service = server
@@ -273,6 +262,7 @@ async fn run_backfill(batch_size: i64) -> Result<()> {
     )
     .context("loading embedding model")?;
 
+    let concurrency = embedder.pool_size();
     let mut total = 0u64;
     loop {
         let rows: Vec<(Uuid, String)> = sqlx::query_as(
@@ -293,20 +283,31 @@ async fn run_backfill(batch_size: i64) -> Result<()> {
         }
 
         let batch_len = rows.len();
+        let mut join_set = tokio::task::JoinSet::new();
         for (id, content) in rows {
-            let embed_out = embedder
-                .embed_full(&content, "backfill")
-                .await
-                .context("embedding for backfill")?;
-            let sparse_json = serde_json::to_value(&embed_out.sparse)
-                .context("serializing sparse embedding")?;
-
-            sqlx::query("UPDATE memories SET sparse_embedding = $1 WHERE id = $2")
-                .bind(&sparse_json)
-                .bind(id)
-                .execute(&pool)
-                .await
-                .context("updating sparse_embedding")?;
+            let embedder = Arc::clone(&embedder);
+            let pool = pool.clone();
+            join_set.spawn(async move {
+                let embed_out = embedder
+                    .embed_full(&content, "backfill")
+                    .await
+                    .context("embedding for backfill")?;
+                let sparse_json = serde_json::to_value(&embed_out.sparse)
+                    .context("serializing sparse embedding")?;
+                sqlx::query("UPDATE memories SET sparse_embedding = $1 WHERE id = $2")
+                    .bind(&sparse_json)
+                    .bind(id)
+                    .execute(&pool)
+                    .await
+                    .context("updating sparse_embedding")?;
+                Ok::<_, anyhow::Error>(())
+            });
+            if join_set.len() >= concurrency {
+                join_set.join_next().await.unwrap()?.context("backfill task")?;
+            }
+        }
+        while let Some(result) = join_set.join_next().await {
+            result?.context("backfill task")?;
         }
 
         total += batch_len as u64;
@@ -369,14 +370,9 @@ async fn serve_http(
     let pool_clone = pool.clone();
     let embedder_clone = Arc::clone(&embedder);
     let ql = query_log_enabled;
-    let rw = cfg.recency_weight;
-    let rh = cfg.recency_half_life_days;
-    let rrf_fts = cfg.rrf_fts;
-    let rrf_sparse = cfg.rrf_sparse;
-    let rrf_k = cfg.rrf_k;
-    let rrf_candidates = cfg.rrf_candidates;
+    let search_cfg = cfg.search.clone();
     let mcp_service = StreamableHttpService::new(
-        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql, rw, rh, rrf_fts, rrf_sparse, rrf_k, rrf_candidates)),
+        move || Ok(ChittaServer::new(pool_clone.clone(), Arc::clone(&embedder_clone), ql, search_cfg.clone())),
         session_manager,
         config,
     );

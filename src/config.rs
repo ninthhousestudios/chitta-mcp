@@ -7,6 +7,17 @@ use std::path::PathBuf;
 
 use crate::error::{ChittaError, Result};
 
+/// Search-related configuration bundled to reduce positional-parameter sprawl.
+#[derive(Debug, Clone)]
+pub struct SearchConfig {
+    pub recency_weight: f32,
+    pub recency_half_life_days: f32,
+    pub rrf_fts: bool,
+    pub rrf_sparse: bool,
+    pub rrf_k: u32,
+    pub rrf_candidates: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -25,16 +36,7 @@ pub struct Config {
     pub http_addr: String,
     /// HTTP listen port. Parsed from `CHITTA_HTTP_PORT`. Default `3100`.
     pub http_port: u16,
-    /// Recency weight for search scoring. `0.0` disables (pure cosine).
-    /// Parsed from `CHITTA_RECENCY_WEIGHT`. Default `0.0`.
-    pub recency_weight: f32,
-    /// Half-life in days for the recency decay curve.
-    /// Parsed from `CHITTA_RECENCY_HALF_LIFE_DAYS`. Default `30.0`.
-    pub recency_half_life_days: f32,
-    pub rrf_fts: bool,
-    pub rrf_sparse: bool,
-    pub rrf_k: u32,
-    pub rrf_candidates: i64,
+    pub search: SearchConfig,
     pub sparse_threshold: f32,
 }
 
@@ -78,8 +80,8 @@ impl Config {
 
         let rrf_fts: bool = parse_env_or("CHITTA_RRF_FTS", false);
         let rrf_sparse: bool = parse_env_or("CHITTA_RRF_SPARSE", false);
-        let rrf_k: u32 = parse_env_or("CHITTA_RRF_K", 60);
-        let rrf_candidates: i64 = parse_env_or("CHITTA_RRF_CANDIDATES", 2);
+        let rrf_k: u32 = parse_env_or::<u32>("CHITTA_RRF_K", 60).max(1);
+        let rrf_candidates: i64 = parse_env_or::<i64>("CHITTA_RRF_CANDIDATES", 5).max(1);
         let sparse_threshold: f32 = parse_env_or("CHITTA_SPARSE_THRESHOLD", 0.01);
 
         if rrf_sparse && !rrf_fts {
@@ -101,12 +103,14 @@ impl Config {
             query_log,
             http_addr,
             http_port,
-            recency_weight,
-            recency_half_life_days,
-            rrf_fts,
-            rrf_sparse,
-            rrf_k,
-            rrf_candidates,
+            search: SearchConfig {
+                recency_weight,
+                recency_half_life_days,
+                rrf_fts,
+                rrf_sparse,
+                rrf_k,
+                rrf_candidates,
+            },
             sparse_threshold,
         })
     }

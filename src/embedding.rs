@@ -52,6 +52,7 @@ pub struct EmbedOutput {
 }
 
 static SPARSE_MISSING_WARN: Once = Once::new();
+static SPARSE_EXTRACT_WARN: Once = Once::new();
 
 /// Dimension of BGE-M3's dense output. Pinned here so a dimension drift
 /// shows up as a loud panic in tests rather than a silent write.
@@ -296,25 +297,34 @@ impl Embedder {
 
                             let dense_vec = data.to_vec();
 
-                            // Extract sparse lexical weights: shape [1, seq_len, 1].
+                            // Extract sparse lexical weights: expected shape [1, seq_len, 1].
                             let sparse = match outputs.get("sparse_weights") {
                                 Some(sw) => {
                                     match sw.try_extract_tensor::<f32>() {
-                                        Ok((_shape, weights)) => {
-                                            let mut map: HashMap<u32, f32> = HashMap::new();
-                                            for (pos, &token_id) in token_ids.iter().enumerate() {
-                                                let w = weights[pos];
-                                                if w >= sparse_threshold {
-                                                    let entry = map.entry(token_id).or_insert(0.0_f32);
-                                                    if w > *entry {
-                                                        *entry = w;
+                                        Ok((shape, weights)) => {
+                                            let total: usize = shape.iter().map(|&d| d as usize).product();
+                                            if total != seq_len {
+                                                tracing::warn!(
+                                                    ?shape, seq_len,
+                                                    "sparse_weights shape mismatch: expected {seq_len} elements, \
+                                                     got {total}; sparse embeddings will be empty for this call"
+                                                );
+                                                HashMap::new()
+                                            } else {
+                                                let mut map: HashMap<u32, f32> = HashMap::new();
+                                                for (pos, &token_id) in token_ids.iter().enumerate() {
+                                                    let w = weights[pos];
+                                                    if w >= sparse_threshold {
+                                                        map.entry(token_id)
+                                                            .and_modify(|v| *v = v.max(w))
+                                                            .or_insert(w);
                                                     }
                                                 }
+                                                map
                                             }
-                                            map
                                         }
                                         Err(e) => {
-                                            SPARSE_MISSING_WARN.call_once(|| {
+                                            SPARSE_EXTRACT_WARN.call_once(|| {
                                                 tracing::warn!(
                                                     "sparse_weights output exists but extraction failed: {e}; \
                                                      sparse embeddings will be empty"

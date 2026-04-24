@@ -5,37 +5,40 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::config::SearchConfig;
 use crate::db::{self, SearchHit};
 use crate::embedding::EmbedOutput;
 use crate::error::Result;
 use pgvector::Vector;
 
+#[tracing::instrument(
+    name = "retrieval.search_hybrid",
+    skip(pool, query_embed, tags, query_text, search_cfg),
+    fields(k, profile),
+)]
 pub async fn search_hybrid(
     pool: &PgPool,
     profile: &str,
     query_embed: &EmbedOutput,
     k: i64,
     tags: &[String],
-    min_similarity: f32,
     recency_weight: f32,
     recency_half_life_days: f32,
-    rrf_fts: bool,
-    rrf_sparse: bool,
-    rrf_k: u32,
-    rrf_candidates: i64,
+    search_cfg: &SearchConfig,
     query_text: &str,
 ) -> Result<(Vec<SearchHit>, i64)> {
-    let fetch_limit = k * rrf_candidates;
+    let fetch_limit = k * search_cfg.rrf_candidates;
     let query_vec = Vector::from(query_embed.dense.clone());
 
-    // Dense leg (always on): run with recency_weight=0 so RRF ranks purely by cosine.
+    // Dense leg (always on): recency_weight=0 so RRF ranks purely by cosine,
+    // min_similarity=0.0 so FTS/sparse candidates aren't pre-filtered out.
     let dense_fut = db::search_by_embedding(
-        pool, profile, &query_vec, fetch_limit, tags, min_similarity, 0.0, recency_half_life_days,
+        pool, profile, &query_vec, fetch_limit, tags, 0.0, 0.0, recency_half_life_days,
     );
 
     // FTS leg (optional).
     let fts_fut = async {
-        if rrf_fts {
+        if search_cfg.rrf_fts {
             db::search_by_fts(pool, profile, query_text, fetch_limit, tags).await
         } else {
             Ok(vec![])
@@ -52,7 +55,7 @@ pub async fn search_hybrid(
 
     // Build rank lists: doc -> rank (0-based).
     let mut rrf_scores: HashMap<Uuid, f32> = HashMap::new();
-    let k_const = rrf_k as f32;
+    let k_const = search_cfg.rrf_k as f32;
 
     for (rank, hit) in dense_hits.iter().enumerate() {
         *rrf_scores.entry(hit.id).or_default() += 1.0 / (k_const + rank as f32);
@@ -62,12 +65,11 @@ pub async fn search_hybrid(
     }
 
     // Sparse re-ranking leg: operates on the candidate pool from dense + FTS.
-    if rrf_sparse && !query_embed.sparse.is_empty() {
+    if search_cfg.rrf_sparse && !query_embed.sparse.is_empty() {
         let candidate_ids: Vec<Uuid> = rrf_scores.keys().copied().collect();
         if !candidate_ids.is_empty() {
             match db::fetch_sparse_embeddings(pool, &candidate_ids).await {
                 Ok(sparse_docs) => {
-                    // Compute dot-product scores, rank, add to RRF.
                     let mut sparse_scored: Vec<(Uuid, f32)> = sparse_docs
                         .into_iter()
                         .map(|(id, doc_sparse)| {
@@ -96,14 +98,20 @@ pub async fn search_hybrid(
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     ranked.truncate(k as usize);
 
-    let final_ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
-
-    if final_ids.is_empty() {
+    if ranked.is_empty() {
         return Ok((vec![], total));
     }
 
-    // Hydrate full SearchHit results.
+    let final_ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
+    let score_map: HashMap<Uuid, f32> = ranked.into_iter().collect();
+
+    // Hydrate full SearchHit results and stamp RRF scores.
     let mut hits = db::fetch_search_hits_by_ids(pool, profile, &final_ids).await?;
+    for hit in &mut hits {
+        if let Some(&score) = score_map.get(&hit.id) {
+            hit.similarity = score;
+        }
+    }
 
     // Apply recency re-ranking post-fusion if enabled.
     if recency_weight > 0.0 {

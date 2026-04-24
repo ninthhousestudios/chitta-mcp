@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
+use crate::config::SearchConfig;
 use crate::embedding::Embedder;
 use crate::error::Result;
 
@@ -28,8 +29,8 @@ pub struct HealthOutput {
     pub version: &'static str,
 }
 
-#[tracing::instrument(name = "tool.health_check", skip(pool, embedder))]
-pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>, rrf_fts: bool, rrf_sparse: bool) -> Result<HealthOutput> {
+#[tracing::instrument(name = "tool.health_check", skip(pool, embedder, search_cfg))]
+pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>, search_cfg: &SearchConfig) -> Result<HealthOutput> {
     let db_connected = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(pool)
         .await
@@ -40,8 +41,8 @@ pub async fn handle(pool: &PgPool, embedder: Arc<Embedder>, rrf_fts: bool, rrf_s
     let all_ok = db_connected && embedder_ok;
 
     let mut legs = vec!["dense"];
-    if rrf_fts { legs.push("fts"); }
-    if rrf_sparse { legs.push("sparse"); }
+    if search_cfg.rrf_fts { legs.push("fts"); }
+    if search_cfg.rrf_sparse { legs.push("sparse"); }
 
     Ok(HealthOutput {
         status: if all_ok { "ok" } else { "degraded" },

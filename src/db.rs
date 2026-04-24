@@ -462,7 +462,13 @@ pub async fn fetch_sparse_embeddings(
 
     let mut result = Vec::with_capacity(rows.len());
     for (id, json) in rows {
-        let map: HashMap<u32, f32> = serde_json::from_value(json).unwrap_or_default();
+        let map: HashMap<u32, f32> = match serde_json::from_value(json) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(%id, "corrupt sparse_embedding JSONB, treating as empty: {e}");
+                HashMap::new()
+            }
+        };
         result.push((id, map));
     }
     Ok(result)

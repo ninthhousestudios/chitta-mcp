@@ -95,8 +95,12 @@ pub async fn handle(
     // cloning; embed borrows it, then we keep ownership for the insert.
     let content = args.content;
     let embed_out = embedder.embed_full(&content, "store_memory").await?;
-    let sparse_json = serde_json::to_value(&embed_out.sparse)
-        .map_err(|e| ChittaError::Internal(format!("failed to serialize sparse embedding: {e}")))?;
+    let sparse_embedding = if embed_out.sparse.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_value(&embed_out.sparse)
+            .map_err(|e| ChittaError::Internal(format!("failed to serialize sparse embedding: {e}")))?)
+    };
 
     let now = Utc::now();
     let event_time = args.event_time.unwrap_or(now);
@@ -111,7 +115,7 @@ pub async fn handle(
         idempotency_key: args.idempotency_key,
         source: args.source,
         metadata: args.metadata,
-        sparse_embedding: Some(sparse_json),
+        sparse_embedding,
     };
 
     let (stored, replayed) = db::insert_or_fetch_memory(pool, &row).await?;

@@ -15,6 +15,7 @@ use rmcp::{
 };
 use sqlx::PgPool;
 
+use crate::config::SearchConfig;
 use crate::embedding::Embedder;
 use crate::error::ChittaError;
 use crate::tools;
@@ -25,12 +26,7 @@ pub struct ChittaServer {
     pool: PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
-    recency_weight: f32,
-    recency_half_life_days: f32,
-    rrf_fts: bool,
-    rrf_sparse: bool,
-    rrf_k: u32,
-    rrf_candidates: i64,
+    search_cfg: SearchConfig,
     tool_router: ToolRouter<Self>,
 }
 
@@ -39,23 +35,13 @@ impl ChittaServer {
         pool: PgPool,
         embedder: Arc<Embedder>,
         query_log_enabled: bool,
-        recency_weight: f32,
-        recency_half_life_days: f32,
-        rrf_fts: bool,
-        rrf_sparse: bool,
-        rrf_k: u32,
-        rrf_candidates: i64,
+        search_cfg: SearchConfig,
     ) -> Self {
         Self {
             pool,
             embedder,
             query_log_enabled,
-            recency_weight,
-            recency_half_life_days,
-            rrf_fts,
-            rrf_sparse,
-            rrf_k,
-            rrf_candidates,
+            search_cfg,
             tool_router: Self::tool_router(),
         }
     }
@@ -106,12 +92,7 @@ impl ChittaServer {
             &self.pool,
             self.embedder.clone(),
             self.query_log_enabled,
-            self.recency_weight,
-            self.recency_half_life_days,
-            self.rrf_fts,
-            self.rrf_sparse,
-            self.rrf_k,
-            self.rrf_candidates,
+            &self.search_cfg,
             args,
         )
         .await
@@ -171,7 +152,7 @@ impl ChittaServer {
         &self,
         Parameters(_args): Parameters<tools::HealthArgs>,
     ) -> Result<String, ErrorData> {
-        let out = tools::health::handle(&self.pool, self.embedder.clone(), self.rrf_fts, self.rrf_sparse)
+        let out = tools::health::handle(&self.pool, self.embedder.clone(), &self.search_cfg)
             .await
             .map_err(chitta_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)

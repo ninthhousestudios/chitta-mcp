@@ -78,6 +78,9 @@ for config_entry in "${CONFIGS[@]}"; do
     echo "  Config: $RUN_NAME ($ENV_PAIRS)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+    # Reset RRF-related vars to prevent leakage between iterations.
+    unset CHITTA_K CHITTA_RRF_FTS CHITTA_RRF_SPARSE CHITTA_RRF_K CHITTA_RRF_CANDIDATES
+
     # Apply env overrides
     for pair in $ENV_PAIRS; do
         export "$pair"

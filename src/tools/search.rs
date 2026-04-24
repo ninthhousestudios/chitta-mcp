@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::config::SearchConfig;
 use crate::db;
 use crate::embedding::Embedder;
 use crate::envelope::{Envelope, estimate_tokens};
@@ -72,12 +73,7 @@ pub async fn handle(
     pool: &PgPool,
     embedder: Arc<Embedder>,
     query_log_enabled: bool,
-    recency_weight: f32,
-    recency_half_life_days: f32,
-    rrf_fts: bool,
-    rrf_sparse: bool,
-    rrf_k: u32,
-    rrf_candidates: i64,
+    search_cfg: &SearchConfig,
     args: SearchArgs,
 ) -> Result<SearchOutput> {
     let search_start = std::time::Instant::now();
@@ -107,19 +103,22 @@ pub async fn handle(
     let min_similarity = min_similarity.unwrap_or(0.0);
     validate::min_similarity(TOOL, min_similarity)?;
 
-    let use_hybrid = rrf_fts || rrf_sparse;
+    let use_hybrid = search_cfg.rrf_fts || search_cfg.rrf_sparse;
 
     let embed_out = embedder.embed_full(&query, "search_memories").await?;
     let query_vec = Vector::from(embed_out.dense.clone());
 
     let (hits, total_available) = if use_hybrid {
         crate::retrieval::search_hybrid(
-            pool, &profile, &embed_out, k, &tags, min_similarity,
-            recency_weight, recency_half_life_days,
-            rrf_fts, rrf_sparse, rrf_k, rrf_candidates, &query,
+            pool, &profile, &embed_out, k, &tags,
+            search_cfg.recency_weight, search_cfg.recency_half_life_days,
+            search_cfg, &query,
         ).await?
     } else {
-        db::search_by_embedding(pool, &profile, &query_vec, k, &tags, min_similarity, recency_weight, recency_half_life_days).await?
+        db::search_by_embedding(
+            pool, &profile, &query_vec, k, &tags, min_similarity,
+            search_cfg.recency_weight, search_cfg.recency_half_life_days,
+        ).await?
     };
 
     let candidates: Vec<SearchHit> = hits
