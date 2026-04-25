@@ -83,6 +83,16 @@ echo "Configs: ${#CONFIGS[@]}"
 echo ""
 
 SWEEP_START=$(date +%s)
+
+# Check if DB already has data (e.g. from a prior interrupted run).
+DB_HAS_DATA=false
+ROW_COUNT=$(su - postgres -c "psql -d chitta_beam -tAc 'SELECT count(*) FROM memories;'" 2>/dev/null || echo "0")
+if [ "$ROW_COUNT" -gt 0 ] 2>/dev/null; then
+    DB_HAS_DATA=true
+    echo "DB already has $ROW_COUNT memories — skipping ingestion for all configs."
+    echo ""
+fi
+
 FIRST=true
 
 for config_entry in "${CONFIGS[@]}"; do
@@ -102,7 +112,10 @@ for config_entry in "${CONFIGS[@]}"; do
     done
 
     SKIP_INGEST_FLAG=()
-    if [ "$FIRST" = true ]; then
+    if [ "$DB_HAS_DATA" = true ]; then
+        _restart_server
+        SKIP_INGEST_FLAG=(--skip-ingestion)
+    elif [ "$FIRST" = true ]; then
         _reset_and_start
         FIRST=false
     else
