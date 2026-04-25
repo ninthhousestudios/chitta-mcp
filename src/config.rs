@@ -16,6 +16,8 @@ pub struct SearchConfig {
     pub rrf_sparse: bool,
     pub rrf_k: u32,
     pub rrf_candidates: i64,
+    pub dedup_field: Option<String>,
+    pub dedup_fetch_factor: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +84,10 @@ impl Config {
         let rrf_sparse: bool = parse_env_or("CHITTA_RRF_SPARSE", false);
         let rrf_k: u32 = parse_env_or::<u32>("CHITTA_RRF_K", 60).max(1);
         let rrf_candidates: i64 = parse_env_or::<i64>("CHITTA_RRF_CANDIDATES", 5).max(1);
+        let dedup_field: Option<String> = std::env::var("CHITTA_DEDUP_FIELD")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let dedup_fetch_factor: i64 = parse_env_or::<i64>("CHITTA_DEDUP_FETCH_FACTOR", 3).max(1);
         let sparse_threshold: f32 = parse_env_or("CHITTA_SPARSE_THRESHOLD", 0.01);
 
         if rrf_sparse && !rrf_fts {
@@ -110,6 +116,8 @@ impl Config {
                 rrf_sparse,
                 rrf_k,
                 rrf_candidates,
+                dedup_field,
+                dedup_fetch_factor,
             },
             sparse_threshold,
         })

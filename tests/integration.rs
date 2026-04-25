@@ -102,6 +102,8 @@ async fn try_shared() -> Option<SharedSetup> {
             rrf_sparse: false,
             rrf_k: 60,
             rrf_candidates: 5,
+            dedup_field: None,
+            dedup_fetch_factor: 3,
         },
         sparse_threshold: 0.01,
     };
@@ -157,6 +159,8 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
             rrf_sparse: false,
             rrf_k: 60,
             rrf_candidates: 5,
+            dedup_field: None,
+            dedup_fetch_factor: 3,
         },
         sparse_threshold: 0.01,
     };
@@ -193,6 +197,8 @@ fn test_search_cfg() -> SearchConfig {
         rrf_sparse: false,
         rrf_k: 60,
         rrf_candidates: 5,
+        dedup_field: None,
+        dedup_fetch_factor: 3,
     }
 }
 
@@ -284,6 +290,7 @@ async fn search_envelope_has_four_fields_on_empty_profile() {
             max_tokens: None,
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -333,6 +340,7 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
             max_tokens: Some(1),
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -429,6 +437,7 @@ async fn search_snippet_is_verbatim_prefix() {
             max_tokens: None,
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -474,6 +483,7 @@ async fn profile_isolation_keeps_searches_scoped() {
             max_tokens: None,
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -587,6 +597,7 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
             max_tokens: None,
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -933,6 +944,7 @@ async fn search_with_tag_filter_returns_only_matching() {
             max_tokens: None,
             tags: Some(vec!["rust".into()]),
             min_similarity: None,
+            include_content: None,
         },
     )
     .await
@@ -981,6 +993,7 @@ async fn search_with_min_similarity_filters_low_scores() {
             max_tokens: None,
             tags: None,
             min_similarity: Some(0.8),
+            include_content: None,
         },
     )
     .await
@@ -1028,6 +1041,7 @@ async fn truncated_false_when_all_results_fit() {
             max_tokens: None,
             tags: None,
             min_similarity: None,
+            include_content: None,
         },
     )
     .await

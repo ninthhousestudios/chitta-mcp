@@ -122,6 +122,8 @@ fn search_output_envelope_shape() {
         record_time: t,
         tags: vec![],
         source: None,
+        content: None,
+        metadata: None,
     };
     let env: SearchOutput = Envelope::new(vec![hit], false, Some(1), 42);
     let v = serde_json::to_value(&env).unwrap();

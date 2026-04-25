@@ -5,6 +5,7 @@
 //! by default. Pass `include_content: true` to get full content + metadata
 //! per hit (avoids follow-up `get_memory` calls).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -113,21 +114,32 @@ pub async fn handle(
     validate::min_similarity(TOOL, min_similarity)?;
 
     let use_hybrid = search_cfg.rrf_fts || search_cfg.rrf_sparse;
+    let fetch_k = if search_cfg.dedup_field.is_some() {
+        k * search_cfg.dedup_fetch_factor
+    } else {
+        k
+    };
 
     let embed_out = embedder.embed_full(&query, "search_memories").await?;
     let query_vec = Vector::from(embed_out.dense.clone());
 
     let (hits, total_available) = if use_hybrid {
         crate::retrieval::search_hybrid(
-            pool, &profile, &embed_out, k, &tags,
+            pool, &profile, &embed_out, fetch_k, &tags,
             search_cfg.recency_weight, search_cfg.recency_half_life_days,
             search_cfg, &query,
         ).await?
     } else {
         db::search_by_embedding(
-            pool, &profile, &query_vec, k, &tags, min_similarity,
+            pool, &profile, &query_vec, fetch_k, &tags, min_similarity,
             search_cfg.recency_weight, search_cfg.recency_half_life_days,
         ).await?
+    };
+
+    let hits = if let Some(ref field) = search_cfg.dedup_field {
+        dedup_by_field(hits, field, k as usize)
+    } else {
+        hits
     };
 
     let candidates: Vec<SearchHit> = hits
@@ -197,6 +209,29 @@ pub async fn handle(
     }
 
     Ok(envelope)
+}
+
+/// Keep the highest-scoring hit per unique value of `metadata[field]`.
+/// Hits without the field pass through unconditionally (no key = always unique).
+/// Input must be sorted by similarity descending (DB/RRF order).
+fn dedup_by_field(hits: Vec<db::SearchHit>, field: &str, k: usize) -> Vec<db::SearchHit> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::with_capacity(k);
+    for hit in hits {
+        let dominated = hit
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get(field))
+            .and_then(|v| v.as_str())
+            .map_or(false, |key| !seen.insert(key.to_string()));
+        if !dominated {
+            result.push(hit);
+            if result.len() >= k {
+                break;
+            }
+        }
+    }
+    result
 }
 
 /// Truncate `candidates` to fit `max_tokens`.

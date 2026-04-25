@@ -177,6 +177,8 @@ def get_chitta_config():
         "rrf_sparse": os.environ.get("CHITTA_RRF_SPARSE", "false").lower() == "true",
         "rrf_k": int(os.environ.get("CHITTA_RRF_K", "60")),
         "rrf_candidates": int(os.environ.get("CHITTA_RRF_CANDIDATES", "5")),
+        "dedup_field": os.environ.get("CHITTA_DEDUP_FIELD", ""),
+        "dedup_fetch_factor": int(os.environ.get("CHITTA_DEDUP_FETCH_FACTOR", "3")),
     }
 
 
