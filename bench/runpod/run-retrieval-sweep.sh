@@ -10,6 +10,11 @@ set -euo pipefail
 #
 # Edit the CONFIGS array below to define sweep parameters.
 # Each entry is "NAME:VAR=VAL VAR=VAL ..."
+#
+# All index types (dense, FTS, sparse) are built at ingestion time
+# regardless of config flags. The sweep ingests once with the first
+# config, then restarts chitta-rs with different retrieval flags for
+# each subsequent config (--skip-ingestion).
 
 DATASET="${1:-personamem}"
 SPLIT="${2:-32k}"
@@ -25,7 +30,6 @@ pg_isready -q 2>/dev/null || pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, 
 
 # ── Sweep configs ────────────────────────────────────────────────────
 # Format: "RUN_NAME:ENV_VAR=VALUE ENV_VAR=VALUE ..."
-# The DB is reset and chitta-rs restarted for each config.
 CONFIGS=(
     "dense-only:CHITTA_K=20"
     "dense-fts:CHITTA_K=20 CHITTA_RRF_FTS=true"
@@ -46,6 +50,16 @@ _reset_and_start() {
     su - postgres -c "psql -c 'CREATE DATABASE chitta_beam OWNER chitta;'"
     su - postgres -c "psql -d chitta_beam -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
 
+    _start_server
+}
+
+_restart_server() {
+    pkill -f "chitta-rs --http" || true
+    sleep 2
+    _start_server
+}
+
+_start_server() {
     cd "$CHITTA_DIR"
     if [ -f .env ]; then set -a; . ./.env; set +a; fi
     if [ -n "${ORT_DYLIB_PATH:-}" ] && [ ! -f "$ORT_DYLIB_PATH" ]; then
@@ -69,6 +83,7 @@ echo "Configs: ${#CONFIGS[@]}"
 echo ""
 
 SWEEP_START=$(date +%s)
+FIRST=true
 
 for config_entry in "${CONFIGS[@]}"; do
     RUN_NAME="${config_entry%%:*}"
@@ -86,14 +101,22 @@ for config_entry in "${CONFIGS[@]}"; do
         export "$pair"
     done
 
-    _reset_and_start
+    SKIP_INGEST_FLAG=()
+    if [ "$FIRST" = true ]; then
+        _reset_and_start
+        FIRST=false
+    else
+        _restart_server
+        SKIP_INGEST_FLAG=(--skip-ingestion)
+    fi
 
     RUN_START=$(date +%s)
     uv run python "$EVAL_SCRIPT" \
         --dataset "$DATASET" \
         --split "$SPLIT" \
         --name "$RUN_NAME" \
-        --amb-dir "$AMB_DIR"
+        --amb-dir "$AMB_DIR" \
+        "${SKIP_INGEST_FLAG[@]}"
     RUN_END=$(date +%s)
 
     echo "  [$RUN_NAME] completed in $((RUN_END - RUN_START))s"
