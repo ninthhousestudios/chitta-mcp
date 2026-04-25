@@ -55,9 +55,11 @@ These measure retrieval quality (hit rate, recall, MRR) without calling an LLM j
 # Dense-only baselines
 bash bench/runpod/run-retrieval-personamem.sh 32k
 bash bench/runpod/run-retrieval-beam.sh 100k
+bash bench/runpod/run-retrieval-lifebench.sh
 
 # Limit queries for a quick spot-check
 bash bench/runpod/run-retrieval-beam.sh 100k 50
+bash bench/runpod/run-retrieval-lifebench.sh 50
 ```
 
 ### RRF hybrid retrieval sweep
@@ -70,6 +72,9 @@ bash bench/runpod/run-retrieval-sweep.sh
 
 # BEAM 100k
 bash bench/runpod/run-retrieval-sweep.sh beam 100k
+
+# LifeBench (~3.5 hours for 7-config sweep)
+bash bench/runpod/run-retrieval-sweep.sh lifebench en
 ```
 
 Edit the `CONFIGS` array in the sweep script to add/remove configs. Each entry is `"RUN_NAME:ENV_VAR=VALUE ENV_VAR=VALUE ..."`. RRF-related env vars are unset between iterations so configs don't leak into each other.
@@ -125,5 +130,7 @@ scp -P <port> root@<pod-ip>:/workspace/amb-results.tar.gz .
 | BEAM 100k | 2000 | ~$0.20 | ~5 min embed | ~45 min |
 | BEAM 500k | 2000 | ~$0.20 | ~10 min embed | ~60 min |
 | BEAM 1M | 2000 | ~$0.20 | ~15 min embed | ~90 min |
+| LifeBench en | 2003 | $0 (retrieval-only) | ~20 min embed | ~30 min |
+| LifeBench sweep (7 configs) | 2003 × 7 | $0 | ~140 min embed | ~3.5 hr |
 
 GPU time estimates assume L40S. CPU ONNX is 10-50x slower.

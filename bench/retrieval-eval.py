@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Retrieval-only evaluation for chitta-rs benchmarks.
 
-Runs PersonaMem/BEAM ingestion + retrieval without LLM calls.
+Runs PersonaMem/BEAM/LifeBench ingestion + retrieval without LLM calls.
 Measures retrieval quality (recall@k, MRR, gold-term overlap) at zero API cost.
 
 Usage (from AMB directory):
@@ -10,6 +10,9 @@ Usage (from AMB directory):
 
     uv run python /workspace/chitta/bench/retrieval-eval.py \
         --dataset beam --split 100k --query-limit 2
+
+    uv run python /workspace/chitta/bench/retrieval-eval.py \
+        --dataset lifebench --split en
 """
 
 import argparse
@@ -108,20 +111,37 @@ def evaluate_query(query, provider):
     context_tokens = len(context) // 4
 
     gold_set = set(query.gold_ids)
-    retrieved_set = {d for d in retrieved_doc_ids if d is not None}
 
-    recall = len(gold_set & retrieved_set) / len(gold_set) if gold_set else 0.0
+    def _matches_gold(doc_id):
+        if doc_id is None:
+            return False
+        if doc_id in gold_set:
+            return True
+        # Chunk IDs like "1_s2_4" should match gold ID "1"
+        # but "1_..." must not match "10"
+        return any(doc_id == g or doc_id.startswith(g + "_") for g in gold_set)
+
+    matched_gold = {
+        g
+        for g in gold_set
+        if any(
+            d is not None and (d == g or d.startswith(g + "_"))
+            for d in retrieved_doc_ids
+        )
+    }
+
+    recall = len(matched_gold) / len(gold_set) if gold_set else 0.0
     n_retrieved = len(retrieved_doc_ids)
     precision = (
-        sum(1 for d in retrieved_doc_ids if d in gold_set) / n_retrieved
+        sum(1 for d in retrieved_doc_ids if _matches_gold(d)) / n_retrieved
         if n_retrieved
         else 0.0
     )
-    hit = 1.0 if gold_set & retrieved_set else 0.0
+    hit = 1.0 if matched_gold else 0.0
 
     mrr = 0.0
     for rank, doc_id in enumerate(retrieved_doc_ids, 1):
-        if doc_id in gold_set:
+        if _matches_gold(doc_id):
             mrr = 1.0 / rank
             break
 
@@ -188,9 +208,12 @@ def compute_summary(args, results, config, ingestion_ms, ingested_docs):
         "mean_context_tokens": round(mean("context_tokens")),
     }
 
-    cat_key = (
-        "question_type" if args.dataset == "personamem" else "question_category"
-    )
+    _CAT_KEYS = {
+        "personamem": "question_type",
+        "beam": "question_category",
+        "lifebench": "category",
+    }
+    cat_key = _CAT_KEYS.get(args.dataset, "category")
     by_category = defaultdict(list)
     for r in results:
         cat = (r.get("meta") or {}).get(cat_key, "unknown")
@@ -278,7 +301,7 @@ def main():
     p = argparse.ArgumentParser(
         description="Retrieval-only benchmark evaluation (no LLM cost)"
     )
-    p.add_argument("--dataset", required=True, choices=["personamem", "beam"])
+    p.add_argument("--dataset", required=True, choices=["personamem", "beam", "lifebench"])
     p.add_argument("--split", required=True)
     p.add_argument("--query-limit", type=int, default=None)
     p.add_argument("--query-id", default=None)
