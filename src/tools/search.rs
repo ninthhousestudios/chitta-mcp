@@ -2,7 +2,8 @@
 //!
 //! Semantic similarity with tag-OR filter and min-similarity floor.
 //! Returns the standard envelope; results carry 200-char verbatim snippets
-//! (full content only via `get_memory`).
+//! by default. Pass `include_content: true` to get full content + metadata
+//! per hit (avoids follow-up `get_memory` calls).
 
 use std::sync::Arc;
 
@@ -48,6 +49,9 @@ pub struct SearchArgs {
     /// Cosine-similarity floor in `[0.0, 1.0]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_similarity: Option<f32>,
+    /// Return full `content` and `metadata` per hit instead of snippet only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_content: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +64,10 @@ pub struct SearchHit {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub type SearchOutput = Envelope<SearchHit>;
@@ -79,7 +87,8 @@ pub async fn handle(
     let search_start = std::time::Instant::now();
     // Destructure up front so we can move `query` into spawn_blocking
     // without cloning and still use the other fields afterward.
-    let SearchArgs { profile, query, k, max_tokens, tags, min_similarity } = args;
+    let SearchArgs { profile, query, k, max_tokens, tags, min_similarity, include_content } = args;
+    let include_content = include_content.unwrap_or(false);
 
     validate::profile(TOOL, &profile)?;
     validate::content_byte_length(TOOL, &query)?;
@@ -131,6 +140,8 @@ pub async fn handle(
             record_time: hit.record_time,
             tags: hit.tags,
             source: hit.source,
+            content: if include_content { Some(hit.content) } else { None },
+            metadata: if include_content { hit.metadata } else { None },
         })
         .collect();
 
@@ -266,6 +277,8 @@ mod tests {
             record_time: t,
             tags: vec![],
             source: None,
+            content: None,
+            metadata: None,
         }
     }
 

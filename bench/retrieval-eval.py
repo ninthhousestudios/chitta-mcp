@@ -83,7 +83,12 @@ def evaluate_query(query, provider):
     t0 = time.perf_counter()
     search_result = provider.mcp.call_tool(
         "search_memories",
-        {"profile": profile, "query": retrieval_query, "k": provider.k},
+        {
+            "profile": profile,
+            "query": retrieval_query,
+            "k": provider.k,
+            "include_content": True,
+        },
     )
     retrieve_ms = (time.perf_counter() - t0) * 1000
 
@@ -93,18 +98,10 @@ def evaluate_query(query, provider):
     similarities = []
     context_parts = []
     for hit in hits:
-        mem_id = hit.get("id", "")
         similarities.append(hit.get("similarity", 0.0))
-        try:
-            full = provider.mcp.call_tool(
-                "get_memory", {"profile": profile, "id": mem_id}
-            )
-            content = full.get("content", hit.get("snippet", ""))
-            doc_id = (full.get("metadata") or {}).get("doc_id")
-            retrieved_doc_ids.append(doc_id)
-        except Exception:
-            content = hit.get("snippet", "")
-            retrieved_doc_ids.append(None)
+        content = hit.get("content") or hit.get("snippet", "")
+        doc_id = (hit.get("metadata") or {}).get("doc_id")
+        retrieved_doc_ids.append(doc_id)
         context_parts.append(content)
 
     context = "\n\n".join(context_parts)

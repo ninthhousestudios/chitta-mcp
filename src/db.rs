@@ -41,6 +41,7 @@ pub struct SearchHit {
     pub tags: Vec<String>,
     pub source: Option<String>,
     pub similarity: f32,
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub async fn connect(cfg: &Config) -> Result<PgPool> {
@@ -370,7 +371,8 @@ pub async fn search_by_embedding(
             record_time,
             tags,
             source,
-            (1.0 - (embedding <=> $2))::real as similarity
+            (1.0 - (embedding <=> $2))::real as similarity,
+            metadata
         from memories
         where profile = $1
           and ($3::text[] = '{}' or tags && $3)
@@ -486,7 +488,7 @@ pub async fn fetch_search_hits_by_ids(
     let rows = sqlx::query_as::<_, SearchHit>(
         r#"
         SELECT id, content, event_time, record_time, tags, source,
-               1.0::real AS similarity
+               1.0::real AS similarity, metadata
         FROM memories
         WHERE profile = $1
           AND id = ANY($2)
