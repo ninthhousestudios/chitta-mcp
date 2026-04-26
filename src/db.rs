@@ -32,7 +32,9 @@ pub struct MemoryRow {
     pub memory_type: String,
 }
 
-/// One hit from an ANN search. Similarity is `1 - cosine_distance`.
+/// One hit from an ANN search. `similarity` is the raw cosine score
+/// (`1 - cosine_distance`). `score` is the final composite after any
+/// recency boost, RRF fusion, and type-weight multiplier — used for ranking.
 #[derive(Debug, Clone, FromRow)]
 pub struct SearchHit {
     pub id: Uuid,
@@ -42,6 +44,8 @@ pub struct SearchHit {
     pub tags: Vec<String>,
     pub source: Option<String>,
     pub similarity: f32,
+    #[sqlx(default)]
+    pub score: f32,
     pub metadata: Option<serde_json::Value>,
     pub memory_type: String,
 }
@@ -294,10 +298,15 @@ pub async fn list_recent_with_count(
 
     let count: i64 = sqlx::query_scalar(
         r#"
-        SELECT count(*)::bigint FROM memories WHERE profile = $1
+        SELECT count(*)::bigint FROM memories
+        WHERE profile = $1
+          AND ($2::text[] = '{}' OR tags && $2)
+          AND ($3::text[] = '{}' OR memory_type = ANY($3))
         "#,
     )
     .bind(profile)
+    .bind(tags)
+    .bind(memory_types)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -407,31 +416,25 @@ pub async fn search_by_embedding(
     .fetch_all(&mut *tx)
     .await?;
 
+    // Initialise score = similarity (raw cosine) so downstream code can
+    // mutate score while similarity stays as the original cosine value.
+    let mut hits: Vec<SearchHit> = hits
+        .into_iter()
+        .map(|mut h| { h.score = h.similarity; h })
+        .collect();
+
     // Re-rank with recency boost: score = cosine * (1 + w * exp(-age/half_life))
-    let hits = if use_recency {
+    if use_recency {
         let now = Utc::now();
         let hl_secs = (recency_half_life_days as f64) * 86400.0;
-        let mut scored: Vec<(SearchHit, f32)> = hits
-            .into_iter()
-            .map(|h| {
-                let age_secs = (now - h.event_time).num_seconds().max(0) as f64;
-                let recency_factor = (-age_secs / hl_secs).exp() as f32;
-                let boosted = h.similarity * (1.0 + recency_weight * recency_factor);
-                (h, boosted)
-            })
-            .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k as usize);
-        scored
-            .into_iter()
-            .map(|(mut h, score)| {
-                h.similarity = score;
-                h
-            })
-            .collect()
-    } else {
-        hits
-    };
+        for h in &mut hits {
+            let age_secs = (now - h.event_time).num_seconds().max(0) as f64;
+            let recency_factor = (-age_secs / hl_secs).exp() as f32;
+            h.score *= 1.0 + recency_weight * recency_factor;
+        }
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(k as usize);
+    }
 
     tx.commit().await?;
     Ok((hits, total))
@@ -537,6 +540,7 @@ pub struct QueryLogEntry {
     pub k: i32,
     pub min_similarity: f32,
     pub tags: Vec<String>,
+    pub memory_types: Vec<String>,
     pub result_ids: Vec<Uuid>,
     pub result_scores: Vec<f32>,
     pub total_available: Option<i64>,
@@ -554,7 +558,7 @@ pub async fn read_query_log(
 ) -> Result<Vec<QueryLogEntry>> {
     let rows = sqlx::query_as::<_, QueryLogEntry>(
         r#"
-        SELECT id, profile, query_text, embedding, k, min_similarity, tags,
+        SELECT id, profile, query_text, embedding, k, min_similarity, tags, memory_types,
                result_ids, result_scores, total_available, truncated, latency_ms, created_at
         FROM query_log
         WHERE ($1::text IS NULL OR profile = $1)
@@ -579,6 +583,7 @@ pub async fn insert_query_log(
     k: i64,
     min_similarity: f32,
     tags: &[String],
+    memory_types: &[String],
     result_ids: &[Uuid],
     result_scores: &[f32],
     total_available: Option<i64>,
@@ -588,9 +593,9 @@ pub async fn insert_query_log(
     sqlx::query(
         r#"
         INSERT INTO query_log
-            (profile, query_text, embedding, k, min_similarity, tags,
+            (profile, query_text, embedding, k, min_similarity, tags, memory_types,
              result_ids, result_scores, total_available, truncated, latency_ms)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         "#,
     )
     .bind(profile)
@@ -599,6 +604,7 @@ pub async fn insert_query_log(
     .bind(k as i32)
     .bind(min_similarity)
     .bind(tags)
+    .bind(memory_types)
     .bind(result_ids)
     .bind(result_scores)
     .bind(total_available)

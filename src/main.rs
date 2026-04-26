@@ -186,7 +186,7 @@ async fn run_replay(profile: Option<String>, limit: i64) -> Result<()> {
             &entry.embedding,
             entry.k as i64,
             &entry.tags,
-            &[],
+            &entry.memory_types,
             entry.min_similarity,
             0.0,
             30.0,

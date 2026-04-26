@@ -64,6 +64,7 @@ pub struct SearchHit {
     pub id: Uuid,
     pub snippet: String,
     pub similarity: f32,
+    pub score: f32,
     pub event_time: DateTime<Utc>,
     pub record_time: DateTime<Utc>,
     pub tags: Vec<String>,
@@ -150,13 +151,8 @@ pub async fn handle(
     };
 
     let mut hits = hits;
-    if !use_hybrid && !search_cfg.type_weights.is_empty() {
-        for hit in &mut hits {
-            if let Some(&w) = search_cfg.type_weights.get(&hit.memory_type) {
-                hit.similarity *= w;
-            }
-        }
-        hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    if !use_hybrid {
+        crate::retrieval::apply_type_weights(&mut hits, &search_cfg.type_weights);
     }
 
     let candidates: Vec<SearchHit> = hits
@@ -165,6 +161,7 @@ pub async fn handle(
             id: hit.id,
             snippet: prefix_chars(&hit.content, SNIPPET_CHARS),
             similarity: hit.similarity,
+            score: hit.score,
             event_time: hit.event_time,
             record_time: hit.record_time,
             tags: hit.tags,
@@ -196,12 +193,13 @@ pub async fn handle(
     if query_log_enabled {
         let latency_ms = search_start.elapsed().as_millis() as i64;
         let result_ids: Vec<Uuid> = envelope.results.iter().map(|h| h.id).collect();
-        let result_scores: Vec<f32> = envelope.results.iter().map(|h| h.similarity).collect();
+        let result_scores: Vec<f32> = envelope.results.iter().map(|h| h.score).collect();
         let log_pool = pool.clone();
         let log_profile = profile.clone();
         let log_query = query.clone();
         let log_embedding = query_vec.clone();
         let log_tags = tags.clone();
+        let log_memory_types = memory_types.clone();
         let log_total = Some(total_available);
         let log_truncated = envelope.truncated;
         tokio::spawn(async move {
@@ -213,6 +211,7 @@ pub async fn handle(
                 k,
                 min_similarity,
                 &log_tags,
+                &log_memory_types,
                 &result_ids,
                 &result_scores,
                 log_total,
@@ -326,6 +325,7 @@ mod tests {
             id: Uuid::now_v7(),
             snippet: snippet.to_string(),
             similarity: 0.9,
+            score: 0.9,
             event_time: t,
             record_time: t,
             tags: vec![],

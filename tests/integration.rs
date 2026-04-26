@@ -1127,3 +1127,166 @@ async fn get_memory_cross_profile_isolation() {
 // Pull chrono::TimeZone into scope for the event_time test without polluting
 // the top of the file.
 use chrono::TimeZone;
+
+// ---- memory_type behavioral tests ------------------------------------
+
+#[tokio::test]
+async fn store_with_non_default_memory_type_roundtrips() {
+    let h = require_harness!("mt_store");
+
+    let stored = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: h.profile.clone(),
+            content: "Josh prefers evidence over intuition for architecture decisions.".into(),
+            idempotency_key: "mt-1".into(),
+            event_time: None,
+            tags: None,
+            source: None,
+            metadata: None,
+            memory_type: Some("observation".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(stored.memory_type, "observation");
+
+    let fetched = tools::get::handle(
+        &h.pool,
+        GetArgs { profile: h.profile.clone(), id: stored.id.to_string() },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fetched.memory_type, "observation");
+}
+
+#[tokio::test]
+async fn search_memory_types_filter_excludes_non_matching() {
+    let h = require_harness!("mt_filter");
+
+    for (key, content, mt) in [
+        ("f-1", "The sun is a star.", "memory"),
+        ("f-2", "Josh corrected the approach — prefers benchmarks first.", "observation"),
+        ("f-3", "Decided to use RRF with k=60 for retrieval.", "decision"),
+    ] {
+        tools::store::handle(
+            &h.pool,
+            h.embedder.clone(),
+            StoreArgs {
+                profile: h.profile.clone(),
+                content: content.into(),
+                idempotency_key: key.into(),
+                event_time: None,
+                tags: None,
+                source: None,
+                metadata: None,
+                memory_type: Some(mt.into()),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let out = tools::search::handle(
+        &h.pool,
+        h.embedder.clone(),
+        false,
+        &test_search_cfg(),
+        SearchArgs {
+            profile: h.profile.clone(),
+            query: "decision about retrieval".into(),
+            k: Some(10),
+            max_tokens: None,
+            tags: None,
+            min_similarity: None,
+            include_content: None,
+            memory_types: Some(vec!["decision".into()]),
+        },
+    )
+    .await
+    .unwrap();
+
+    for hit in &out.results {
+        assert_eq!(hit.memory_type, "decision", "filter should exclude non-decision types");
+    }
+    assert!(!out.results.is_empty(), "should find at least one decision");
+}
+
+#[tokio::test]
+async fn invalid_memory_type_store_rejected() {
+    let h = require_harness!("mt_invalid");
+
+    let err = tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: h.profile.clone(),
+            content: "test".into(),
+            idempotency_key: "bad-1".into(),
+            event_time: None,
+            tags: None,
+            source: None,
+            metadata: None,
+            memory_type: Some("bogus".into()),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    match err {
+        ChittaError::InvalidArgument { argument, .. } => {
+            assert_eq!(argument, "memory_type");
+        }
+        other => panic!("expected InvalidArgument for memory_type, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn search_returns_score_and_similarity() {
+    let h = require_harness!("mt_score");
+
+    tools::store::handle(
+        &h.pool,
+        h.embedder.clone(),
+        StoreArgs {
+            profile: h.profile.clone(),
+            content: "Rust programming language is great for systems.".into(),
+            idempotency_key: "sc-1".into(),
+            event_time: None,
+            tags: None,
+            source: None,
+            metadata: None,
+            memory_type: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let out = tools::search::handle(
+        &h.pool,
+        h.embedder.clone(),
+        false,
+        &test_search_cfg(),
+        SearchArgs {
+            profile: h.profile.clone(),
+            query: "Rust systems programming".into(),
+            k: Some(5),
+            max_tokens: None,
+            tags: None,
+            min_similarity: None,
+            include_content: None,
+            memory_types: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(!out.results.is_empty());
+    let hit = &out.results[0];
+    assert!(hit.similarity > 0.0, "similarity should be raw cosine > 0");
+    assert!(hit.score > 0.0, "score should be > 0");
+    assert_eq!(hit.similarity, hit.score, "with no weights/recency, score == similarity");
+}

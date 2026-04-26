@@ -120,6 +120,7 @@ fn search_output_envelope_shape() {
         id: uuid::Uuid::now_v7(),
         snippet: "snip".into(),
         similarity: 0.88,
+        score: 0.88,
         event_time: t,
         record_time: t,
         tags: vec![],
@@ -132,7 +133,7 @@ fn search_output_envelope_shape() {
     let v = serde_json::to_value(&env).unwrap();
     assert_keys(&v, &["results", "truncated", "total_available", "budget_spent_tokens"]);
     let first = &v["results"][0];
-    assert_keys(first, &["id", "snippet", "similarity", "event_time", "record_time", "tags", "memory_type"]);
+    assert_keys(first, &["id", "snippet", "similarity", "score", "event_time", "record_time", "tags", "memory_type"]);
 }
 
 // ---- Error contract ------------------------------------------------

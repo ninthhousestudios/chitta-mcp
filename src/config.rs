@@ -141,12 +141,31 @@ impl Config {
 }
 
 fn parse_type_weights(s: &str) -> HashMap<String, f32> {
-    s.split(',')
-        .filter_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            Some((k.trim().to_string(), v.trim().parse::<f32>().ok()?))
-        })
-        .collect()
+    use crate::tools::validate::VALID_MEMORY_TYPES;
+
+    let mut map = HashMap::new();
+    for pair in s.split(',') {
+        let Some((k, v)) = pair.split_once('=') else {
+            tracing::warn!("CHITTA_TYPE_WEIGHTS: ignoring malformed entry {pair:?}");
+            continue;
+        };
+        let key = k.trim();
+        let Ok(weight) = v.trim().parse::<f32>() else {
+            tracing::warn!("CHITTA_TYPE_WEIGHTS: non-numeric value for {key:?}: {}", v.trim());
+            continue;
+        };
+        if !VALID_MEMORY_TYPES.contains(&key) {
+            tracing::warn!("CHITTA_TYPE_WEIGHTS: unknown type {key:?} — valid: {VALID_MEMORY_TYPES:?}");
+        }
+        if weight <= 0.0 {
+            tracing::warn!("CHITTA_TYPE_WEIGHTS: weight for {key:?} is {weight} (should be > 0)");
+        }
+        map.insert(key.to_string(), weight);
+    }
+    if !map.is_empty() {
+        tracing::info!("Type weights: {map:?}");
+    }
+    map
 }
 
 fn parse_env_or<T: std::str::FromStr + std::fmt::Display>(name: &str, default: T) -> T {

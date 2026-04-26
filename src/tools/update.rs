@@ -76,7 +76,7 @@ pub async fn handle(
     if args.content.is_none() && args.tags.is_none() && args.source.is_none() && args.metadata.is_none() && args.memory_type.is_none() {
         return Err(ChittaError::InvalidArgument {
             tool: TOOL,
-            argument: "content/tags".to_string(),
+            argument: "fields".to_string(),
             constraint: "at least one of content, tags, source, metadata, or memory_type must be provided".to_string(),
             received: None,
             next_action: "Provide at least one field to update.".to_string(),

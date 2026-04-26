@@ -335,4 +335,21 @@ mod tests {
         let over = "x".repeat(MAX_CONTENT_BYTES + 1);
         assert!(content_byte_length("test_tool", &over).is_err());
     }
+
+    #[test]
+    fn memory_type_rules() {
+        for valid in VALID_MEMORY_TYPES {
+            assert!(memory_type("t", valid).is_ok(), "{valid} should be valid");
+        }
+        assert!(memory_type("t", "bogus").is_err());
+        assert!(memory_type("t", "Memory").is_err());
+        assert!(memory_type("t", "").is_err());
+    }
+
+    #[test]
+    fn memory_types_rules() {
+        assert!(memory_types("t", &["observation".into(), "decision".into()]).is_ok());
+        assert!(memory_types("t", &["observation".into(), "bogus".into()]).is_err());
+        assert!(memory_types("t", &[]).is_ok());
+    }
 }

@@ -106,12 +106,14 @@ pub async fn search_hybrid(
     let final_ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
     let score_map: HashMap<Uuid, f32> = ranked.into_iter().collect();
 
-    // Hydrate full SearchHit results and stamp RRF scores.
+    // Preserve raw cosine similarity from the dense leg for each candidate.
+    let dense_sim: HashMap<Uuid, f32> = dense_hits.iter().map(|h| (h.id, h.similarity)).collect();
+
+    // Hydrate full SearchHit results and stamp scores.
     let mut hits = db::fetch_search_hits_by_ids(pool, profile, &final_ids).await?;
     for hit in &mut hits {
-        if let Some(&score) = score_map.get(&hit.id) {
-            hit.similarity = score;
-        }
+        hit.similarity = dense_sim.get(&hit.id).copied().unwrap_or(0.0);
+        hit.score = score_map.get(&hit.id).copied().unwrap_or(0.0);
     }
 
     // Apply recency re-ranking post-fusion if enabled.
@@ -121,21 +123,26 @@ pub async fn search_hybrid(
         for hit in &mut hits {
             let age_secs = (now - hit.event_time).num_seconds().max(0) as f64;
             let recency_factor = (-age_secs / hl_secs).exp() as f32;
-            hit.similarity *= 1.0 + recency_weight * recency_factor;
+            hit.score *= 1.0 + recency_weight * recency_factor;
         }
-        hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    if !search_cfg.type_weights.is_empty() {
-        for hit in &mut hits {
-            if let Some(&w) = search_cfg.type_weights.get(&hit.memory_type) {
-                hit.similarity *= w;
-            }
-        }
-        hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    apply_type_weights(&mut hits, &search_cfg.type_weights);
 
     Ok((hits, total))
+}
+
+pub fn apply_type_weights(hits: &mut [db::SearchHit], weights: &HashMap<String, f32>) {
+    if weights.is_empty() {
+        return;
+    }
+    for hit in hits.iter_mut() {
+        if let Some(&w) = weights.get(&hit.memory_type) {
+            hit.score *= w;
+        }
+    }
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 }
 
 #[cfg(test)]
