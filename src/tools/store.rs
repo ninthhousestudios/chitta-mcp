@@ -44,7 +44,7 @@ pub struct StoreArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
     /// Memory type classification. Default: "memory".
-    /// Valid: memory, observation, decision, session_summary, mental_model, document_ref.
+    /// Valid: memory, observation, decision, session_summary, mental_model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_type: Option<String>,
 }

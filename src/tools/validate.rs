@@ -195,7 +195,6 @@ pub const VALID_MEMORY_TYPES: &[&str] = &[
     "decision",
     "session_summary",
     "mental_model",
-    "document_ref",
 ];
 
 pub fn memory_type(tool: &'static str, value: &str) -> Result<()> {

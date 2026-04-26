@@ -54,7 +54,7 @@ pub struct SearchArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_content: Option<bool>,
     /// Filter by memory type(s). OR-match: returns memories matching any listed type.
-    /// Valid types: memory, observation, decision, session_summary, mental_model, document_ref.
+    /// Valid types: memory, observation, decision, session_summary, mental_model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_types: Option<Vec<String>>,
 }
