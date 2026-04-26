@@ -53,6 +53,10 @@ pub struct SearchArgs {
     /// Return full `content` and `metadata` per hit instead of snippet only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_content: Option<bool>,
+    /// Filter by memory type(s). OR-match: returns memories matching any listed type.
+    /// Valid types: memory, observation, decision, session_summary, mental_model, document_ref.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_types: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +73,7 @@ pub struct SearchHit {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    pub memory_type: String,
 }
 
 pub type SearchOutput = Envelope<SearchHit>;
@@ -88,7 +93,7 @@ pub async fn handle(
     let search_start = std::time::Instant::now();
     // Destructure up front so we can move `query` into spawn_blocking
     // without cloning and still use the other fields afterward.
-    let SearchArgs { profile, query, k, max_tokens, tags, min_similarity, include_content } = args;
+    let SearchArgs { profile, query, k, max_tokens, tags, min_similarity, include_content, memory_types } = args;
     let include_content = include_content.unwrap_or(false);
 
     validate::profile(TOOL, &profile)?;
@@ -110,6 +115,8 @@ pub async fn handle(
     }
     let tags = tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
+    let memory_types = memory_types.unwrap_or_default();
+    validate::memory_types(TOOL, &memory_types)?;
     let min_similarity = min_similarity.unwrap_or(0.0);
     validate::min_similarity(TOOL, min_similarity)?;
 
@@ -125,13 +132,13 @@ pub async fn handle(
 
     let (hits, total_available) = if use_hybrid {
         crate::retrieval::search_hybrid(
-            pool, &profile, &embed_out, fetch_k, &tags,
+            pool, &profile, &embed_out, fetch_k, &tags, &memory_types,
             search_cfg.recency_weight, search_cfg.recency_half_life_days,
             search_cfg, &query,
         ).await?
     } else {
         db::search_by_embedding(
-            pool, &profile, &query_vec, fetch_k, &tags, min_similarity,
+            pool, &profile, &query_vec, fetch_k, &tags, &memory_types, min_similarity,
             search_cfg.recency_weight, search_cfg.recency_half_life_days,
         ).await?
     };
@@ -154,6 +161,7 @@ pub async fn handle(
             source: hit.source,
             content: if include_content { Some(hit.content) } else { None },
             metadata: if include_content { hit.metadata } else { None },
+            memory_type: hit.memory_type,
         })
         .collect();
 
@@ -314,6 +322,7 @@ mod tests {
             source: None,
             content: None,
             metadata: None,
+            memory_type: "memory".to_string(),
         }
     }
 

@@ -39,6 +39,9 @@ pub struct UpdateArgs {
     /// New metadata. Replaces existing metadata entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// New memory type. Validates against allowed types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +56,7 @@ pub struct UpdateOutput {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    pub memory_type: String,
     pub re_embedded: bool,
 }
 
@@ -69,13 +73,13 @@ pub async fn handle(
     validate::profile(TOOL, &args.profile)?;
     let id = validate::parse_uuid(TOOL, "id", &args.id)?;
 
-    if args.content.is_none() && args.tags.is_none() && args.source.is_none() && args.metadata.is_none() {
+    if args.content.is_none() && args.tags.is_none() && args.source.is_none() && args.metadata.is_none() && args.memory_type.is_none() {
         return Err(ChittaError::InvalidArgument {
             tool: TOOL,
             argument: "content/tags".to_string(),
-            constraint: "at least one of content, tags, source, or metadata must be provided".to_string(),
+            constraint: "at least one of content, tags, source, metadata, or memory_type must be provided".to_string(),
             received: None,
-            next_action: "Provide content and/or tags to update.".to_string(),
+            next_action: "Provide at least one field to update.".to_string(),
         });
     }
 
@@ -85,6 +89,9 @@ pub async fn handle(
     }
     if let Some(ref tags) = args.tags {
         validate::tags(TOOL, tags)?;
+    }
+    if let Some(ref mt) = args.memory_type {
+        validate::memory_type(TOOL, mt)?;
     }
 
     // If content changed, re-embed (both dense and sparse).
@@ -107,6 +114,7 @@ pub async fn handle(
         args.source.as_deref(),
         args.metadata.as_ref(),
         sparse_embedding.as_ref(),
+        args.memory_type.as_deref(),
     )
     .await?
     .ok_or_else(|| ChittaError::NotFound {
@@ -126,6 +134,7 @@ pub async fn handle(
         tags: row.tags,
         source: row.source,
         metadata: row.metadata,
+        memory_type: row.memory_type,
         re_embedded,
     })
 }

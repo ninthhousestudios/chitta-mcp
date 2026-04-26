@@ -37,6 +37,7 @@ pub struct GetOutput {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    pub memory_type: String,
 }
 
 #[tracing::instrument(
@@ -67,5 +68,6 @@ pub async fn handle(pool: &PgPool, args: GetArgs) -> Result<GetOutput> {
         tags: row.tags,
         source: row.source,
         metadata: row.metadata,
+        memory_type: row.memory_type,
     })
 }

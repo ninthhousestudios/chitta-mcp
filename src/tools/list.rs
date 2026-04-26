@@ -37,6 +37,9 @@ pub struct ListArgs {
     /// OR-match: a memory matches if it has any of these tags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// Filter by memory type(s). OR-match: returns memories matching any listed type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_types: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +51,7 @@ pub struct ListItem {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    pub memory_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,8 +81,10 @@ pub async fn handle(pool: &PgPool, args: ListArgs) -> Result<ListOutput> {
 
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
+    let memory_types = args.memory_types.unwrap_or_default();
+    validate::memory_types(TOOL, &memory_types)?;
 
-    let (rows, total_in_profile) = db::list_recent_with_count(pool, &args.profile, limit, &tags).await?;
+    let (rows, total_in_profile) = db::list_recent_with_count(pool, &args.profile, limit, &tags, &memory_types).await?;
 
     let memories = rows
         .into_iter()
@@ -89,6 +95,7 @@ pub async fn handle(pool: &PgPool, args: ListArgs) -> Result<ListOutput> {
             record_time: row.record_time,
             tags: row.tags,
             source: row.source,
+            memory_type: row.memory_type,
         })
         .collect();
 

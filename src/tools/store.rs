@@ -43,6 +43,10 @@ pub struct StoreArgs {
     /// Arbitrary structured data alongside the memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// Memory type classification. Default: "memory".
+    /// Valid: memory, observation, decision, session_summary, mental_model, document_ref.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +61,7 @@ pub struct StoreOutput {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    pub memory_type: String,
     pub idempotent_replay: bool,
 }
 
@@ -79,6 +84,8 @@ pub async fn handle(
     }
     let tags = args.tags.unwrap_or_default();
     validate::tags(TOOL, &tags)?;
+    let memory_type = args.memory_type.unwrap_or_else(|| "memory".to_string());
+    validate::memory_type(TOOL, &memory_type)?;
 
     // Pre-flight SELECT: if the (profile, idempotency_key) pair already
     // exists, return the prior row immediately — no embed, no insert.
@@ -116,6 +123,7 @@ pub async fn handle(
         source: args.source,
         metadata: args.metadata,
         sparse_embedding,
+        memory_type,
     };
 
     let (stored, replayed) = db::insert_or_fetch_memory(pool, &row).await?;
@@ -132,6 +140,7 @@ fn row_to_output(row: MemoryRow, replayed: bool) -> StoreOutput {
         tags: row.tags,
         source: row.source,
         metadata: row.metadata,
+        memory_type: row.memory_type,
         idempotent_replay: replayed,
     }
 }

@@ -29,6 +29,7 @@ pub struct MemoryRow {
     pub source: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub sparse_embedding: Option<serde_json::Value>,
+    pub memory_type: String,
 }
 
 /// One hit from an ANN search. Similarity is `1 - cosine_distance`.
@@ -42,6 +43,7 @@ pub struct SearchHit {
     pub source: Option<String>,
     pub similarity: f32,
     pub metadata: Option<serde_json::Value>,
+    pub memory_type: String,
 }
 
 pub async fn connect(cfg: &Config) -> Result<PgPool> {
@@ -74,9 +76,9 @@ pub async fn insert_or_fetch_memory(
     let insert_result = sqlx::query_as::<_, MemoryRow>(
         r#"
         insert into memories
-            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+            (id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        returning id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         "#,
     )
     .bind(new.id)
@@ -90,6 +92,7 @@ pub async fn insert_or_fetch_memory(
     .bind(&new.source)
     .bind(&new.metadata)
     .bind(&new.sparse_embedding)
+    .bind(&new.memory_type)
     .fetch_one(pool)
     .await;
 
@@ -127,7 +130,7 @@ pub async fn find_by_idempotency_key(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         from memories
         where profile = $1 and idempotency_key = $2
         "#,
@@ -146,7 +149,7 @@ pub async fn get_memory_by_id(
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
-        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+        select id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         from memories
         where profile = $1 and id = $2
         "#,
@@ -174,6 +177,7 @@ pub async fn update_memory(
     source: Option<&str>,
     metadata: Option<&serde_json::Value>,
     sparse_embedding: Option<&serde_json::Value>,
+    memory_type: Option<&str>,
 ) -> Result<Option<MemoryRow>> {
     let row = sqlx::query_as::<_, MemoryRow>(
         r#"
@@ -183,9 +187,10 @@ pub async fn update_memory(
             tags             = COALESCE($5, tags),
             source           = COALESCE($6, source),
             metadata         = COALESCE($7, metadata),
-            sparse_embedding = COALESCE($8, sparse_embedding)
+            sparse_embedding = COALESCE($8, sparse_embedding),
+            memory_type      = COALESCE($9, memory_type)
         WHERE profile = $1 AND id = $2
-        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+        RETURNING id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         "#,
     )
     .bind(profile)
@@ -196,6 +201,7 @@ pub async fn update_memory(
     .bind(source)
     .bind(metadata)
     .bind(sparse_embedding)
+    .bind(memory_type)
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -223,13 +229,15 @@ pub async fn list_recent(
     profile: &str,
     limit: i64,
     tags: &[String],
+    memory_types: &[String],
 ) -> Result<Vec<MemoryRow>> {
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
+          AND ($4::text[] = '{}' OR memory_type = ANY($4))
         ORDER BY record_time DESC
         LIMIT $2
         "#,
@@ -237,6 +245,7 @@ pub async fn list_recent(
     .bind(profile)
     .bind(limit)
     .bind(tags)
+    .bind(memory_types)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -261,15 +270,17 @@ pub async fn list_recent_with_count(
     profile: &str,
     limit: i64,
     tags: &[String],
+    memory_types: &[String],
 ) -> Result<(Vec<MemoryRow>, i64)> {
     let mut tx = pool.begin().await?;
 
     let rows = sqlx::query_as::<_, MemoryRow>(
         r#"
-        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding
+        SELECT id, profile, content, embedding, event_time, record_time, tags, idempotency_key, source, metadata, sparse_embedding, memory_type
         FROM memories
         WHERE profile = $1
           AND ($3::text[] = '{}' OR tags && $3)
+          AND ($4::text[] = '{}' OR memory_type = ANY($4))
         ORDER BY record_time DESC
         LIMIT $2
         "#,
@@ -277,6 +288,7 @@ pub async fn list_recent_with_count(
     .bind(profile)
     .bind(limit)
     .bind(tags)
+    .bind(memory_types)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -322,6 +334,7 @@ pub async fn search_by_embedding(
     query: &Vector,
     k: i64,
     tags: &[String],
+    memory_types: &[String],
     min_similarity: f32,
     recency_weight: f32,
     recency_half_life_days: f32,
@@ -343,10 +356,12 @@ pub async fn search_by_embedding(
         from memories
         where profile = $1
           and ($2::text[] = '{}' or tags && $2)
+          and ($3::text[] = '{}' or memory_type = ANY($3))
         "#,
     )
     .bind(profile)
     .bind(tags)
+    .bind(memory_types)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -372,10 +387,12 @@ pub async fn search_by_embedding(
             tags,
             source,
             (1.0 - (embedding <=> $2))::real as similarity,
-            metadata
+            metadata,
+            memory_type
         from memories
         where profile = $1
           and ($3::text[] = '{}' or tags && $3)
+          and ($6::text[] = '{}' or memory_type = ANY($6))
           and (1.0 - (embedding <=> $2))::real >= $4
         order by embedding <=> $2
         limit $5
@@ -386,6 +403,7 @@ pub async fn search_by_embedding(
     .bind(tags)
     .bind(min_similarity)
     .bind(fetch_limit)
+    .bind(memory_types)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -425,6 +443,7 @@ pub async fn search_by_fts(
     query_text: &str,
     limit: i64,
     tags: &[String],
+    memory_types: &[String],
 ) -> Result<Vec<Uuid>> {
     let rows: Vec<(Uuid,)> = sqlx::query_as(
         r#"
@@ -433,6 +452,7 @@ pub async fn search_by_fts(
         WHERE profile = $1
           AND content_tsvector @@ plainto_tsquery('english', $2)
           AND ($4::text[] = '{}' OR tags && $4)
+          AND ($5::text[] = '{}' OR memory_type = ANY($5))
         ORDER BY ts_rank(content_tsvector, plainto_tsquery('english', $2)) DESC
         LIMIT $3
         "#,
@@ -441,6 +461,7 @@ pub async fn search_by_fts(
     .bind(query_text)
     .bind(limit)
     .bind(tags)
+    .bind(memory_types)
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
@@ -488,7 +509,7 @@ pub async fn fetch_search_hits_by_ids(
     let rows = sqlx::query_as::<_, SearchHit>(
         r#"
         SELECT id, content, event_time, record_time, tags, source,
-               1.0::real AS similarity, metadata
+               1.0::real AS similarity, metadata, memory_type
         FROM memories
         WHERE profile = $1
           AND id = ANY($2)

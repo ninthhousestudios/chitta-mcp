@@ -13,7 +13,7 @@ use pgvector::Vector;
 
 #[tracing::instrument(
     name = "retrieval.search_hybrid",
-    skip(pool, query_embed, tags, query_text, search_cfg),
+    skip(pool, query_embed, tags, memory_types, query_text, search_cfg),
     fields(k, profile),
 )]
 pub async fn search_hybrid(
@@ -22,6 +22,7 @@ pub async fn search_hybrid(
     query_embed: &EmbedOutput,
     k: i64,
     tags: &[String],
+    memory_types: &[String],
     recency_weight: f32,
     recency_half_life_days: f32,
     search_cfg: &SearchConfig,
@@ -33,13 +34,13 @@ pub async fn search_hybrid(
     // Dense leg (always on): recency_weight=0 so RRF ranks purely by cosine,
     // min_similarity=0.0 so FTS/sparse candidates aren't pre-filtered out.
     let dense_fut = db::search_by_embedding(
-        pool, profile, &query_vec, fetch_limit, tags, 0.0, 0.0, recency_half_life_days,
+        pool, profile, &query_vec, fetch_limit, tags, memory_types, 0.0, 0.0, recency_half_life_days,
     );
 
     // FTS leg (optional).
     let fts_fut = async {
         if search_cfg.rrf_fts {
-            db::search_by_fts(pool, profile, query_text, fetch_limit, tags).await
+            db::search_by_fts(pool, profile, query_text, fetch_limit, tags, memory_types).await
         } else {
             Ok(vec![])
         }

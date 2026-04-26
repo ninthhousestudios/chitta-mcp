@@ -189,6 +189,35 @@ pub fn max_tokens(tool: &'static str, value: u64) -> Result<()> {
     Ok(())
 }
 
+pub const VALID_MEMORY_TYPES: &[&str] = &[
+    "memory",
+    "observation",
+    "decision",
+    "session_summary",
+    "mental_model",
+    "document_ref",
+];
+
+pub fn memory_type(tool: &'static str, value: &str) -> Result<()> {
+    if !VALID_MEMORY_TYPES.contains(&value) {
+        return Err(ChittaError::InvalidArgument {
+            tool,
+            argument: "memory_type".to_string(),
+            constraint: format!("one of: {}", VALID_MEMORY_TYPES.join(", ")),
+            received: Some(json!(value)),
+            next_action: format!("Use one of: {}", VALID_MEMORY_TYPES.join(", ")),
+        });
+    }
+    Ok(())
+}
+
+pub fn memory_types(tool: &'static str, values: &[String]) -> Result<()> {
+    for v in values {
+        memory_type(tool, v)?;
+    }
+    Ok(())
+}
+
 /// Parse a UUID argument, translating parse errors to a populated
 /// `InvalidArgument`.
 pub fn parse_uuid(tool: &'static str, argument: &'static str, value: &str) -> Result<Uuid> {

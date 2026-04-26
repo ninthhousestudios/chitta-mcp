@@ -217,6 +217,7 @@ async fn idempotent_replay_returns_same_row() {
         tags: None,
         source: None,
         metadata: None,
+        memory_type: None,
     };
 
     let first = tools::store::handle(&h.pool, h.embedder.clone(), args()).await.unwrap();
@@ -259,6 +260,7 @@ async fn verbatim_roundtrip_preserves_unicode_and_whitespace() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -291,6 +293,7 @@ async fn search_envelope_has_four_fields_on_empty_profile() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -321,6 +324,7 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
                 tags: None,
                 source: None,
                 metadata: None,
+                memory_type: None,
             },
         )
         .await
@@ -341,6 +345,7 @@ async fn search_max_tokens_triggers_truncated_with_honest_total() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -369,6 +374,7 @@ async fn error_contract_invalid_event_time_populates_next_action() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -420,6 +426,7 @@ async fn search_snippet_is_verbatim_prefix() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -438,6 +445,7 @@ async fn search_snippet_is_verbatim_prefix() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -466,6 +474,7 @@ async fn profile_isolation_keeps_searches_scoped() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -484,6 +493,7 @@ async fn profile_isolation_keeps_searches_scoped() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -510,6 +520,7 @@ async fn content_too_long_rejected_with_token_count() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -538,6 +549,7 @@ async fn concurrent_duplicate_writes_converge_on_one_row() {
         tags: None,
         source: None,
         metadata: None,
+        memory_type: None,
     };
 
     let (a, b) = tokio::join!(
@@ -580,6 +592,7 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
             tags: Some(vec!["db".into(), "perf".into()]),
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -598,6 +611,7 @@ async fn search_finds_stored_memory_by_semantic_similarity() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -628,6 +642,7 @@ async fn update_memory_content_reembeds() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -643,6 +658,7 @@ async fn update_memory_content_reembeds() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -676,6 +692,7 @@ async fn update_memory_tags_only_no_reembed() {
             tags: Some(vec!["old".into()]),
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -691,6 +708,7 @@ async fn update_memory_tags_only_no_reembed() {
             tags: Some(vec!["new-tag".into(), "another".into()]),
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -716,6 +734,7 @@ async fn update_memory_not_found() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -741,6 +760,7 @@ async fn update_memory_requires_at_least_one_field() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -773,6 +793,7 @@ async fn delete_memory_removes_row() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -836,6 +857,7 @@ async fn list_recent_returns_time_ordered() {
                 tags: None,
                 source: None,
                 metadata: None,
+                memory_type: None,
             },
         )
         .await
@@ -844,7 +866,7 @@ async fn list_recent_returns_time_ordered() {
 
     let out = tools::list::handle(
         &h.pool,
-        ListArgs { profile, limit: None, tags: None },
+        ListArgs { profile, limit: None, tags: None , memory_types: None },
     )
     .await
     .unwrap();
@@ -878,6 +900,7 @@ async fn list_recent_respects_limit() {
                 tags: None,
                 source: None,
                 metadata: None,
+                memory_type: None,
             },
         )
         .await
@@ -886,7 +909,7 @@ async fn list_recent_respects_limit() {
 
     let out = tools::list::handle(
         &h.pool,
-        ListArgs { profile, limit: Some(2), tags: None },
+        ListArgs { profile, limit: Some(2), tags: None , memory_types: None },
     )
     .await
     .unwrap();
@@ -911,6 +934,7 @@ async fn search_with_tag_filter_returns_only_matching() {
             tags: Some(vec!["rust".into()]),
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -927,6 +951,7 @@ async fn search_with_tag_filter_returns_only_matching() {
             tags: Some(vec!["python".into()]),
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -945,6 +970,7 @@ async fn search_with_tag_filter_returns_only_matching() {
             tags: Some(vec!["rust".into()]),
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -976,6 +1002,7 @@ async fn search_with_min_similarity_filters_low_scores() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
@@ -994,6 +1021,7 @@ async fn search_with_min_similarity_filters_low_scores() {
             tags: None,
             min_similarity: Some(0.8),
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -1023,6 +1051,7 @@ async fn truncated_false_when_all_results_fit() {
                 tags: None,
                 source: None,
                 metadata: None,
+                memory_type: None,
             },
         )
         .await
@@ -1042,6 +1071,7 @@ async fn truncated_false_when_all_results_fit() {
             tags: None,
             min_similarity: None,
             include_content: None,
+            memory_types: None,
         },
     )
     .await
@@ -1071,6 +1101,7 @@ async fn get_memory_cross_profile_isolation() {
             tags: None,
             source: None,
             metadata: None,
+            memory_type: None,
         },
     )
     .await
