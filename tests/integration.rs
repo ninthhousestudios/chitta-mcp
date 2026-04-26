@@ -104,6 +104,7 @@ async fn try_shared() -> Option<SharedSetup> {
             rrf_candidates: 5,
             dedup_field: None,
             dedup_fetch_factor: 3,
+            type_weights: std::collections::HashMap::new(),
         },
         sparse_threshold: 0.01,
     };
@@ -161,6 +162,7 @@ async fn fresh_harness(name: &str) -> Option<Harness> {
             rrf_candidates: 5,
             dedup_field: None,
             dedup_fetch_factor: 3,
+            type_weights: std::collections::HashMap::new(),
         },
         sparse_threshold: 0.01,
     };
@@ -199,6 +201,7 @@ fn test_search_cfg() -> SearchConfig {
         rrf_candidates: 5,
         dedup_field: None,
         dedup_fetch_factor: 3,
+        type_weights: std::collections::HashMap::new(),
     }
 }
 

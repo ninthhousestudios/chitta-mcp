@@ -3,6 +3,7 @@
 //! Loaded once at startup via [`Config::from_env`]. No file formats, no
 //! runtime reconfiguration — restart to change settings.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::error::{ChittaError, Result};
@@ -18,6 +19,7 @@ pub struct SearchConfig {
     pub rrf_candidates: i64,
     pub dedup_field: Option<String>,
     pub dedup_fetch_factor: i64,
+    pub type_weights: HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,11 @@ impl Config {
             .filter(|s| !s.is_empty());
         let dedup_fetch_factor: i64 = parse_env_or::<i64>("CHITTA_DEDUP_FETCH_FACTOR", 3).max(1);
         let sparse_threshold: f32 = parse_env_or("CHITTA_SPARSE_THRESHOLD", 0.01);
+        let type_weights: HashMap<String, f32> = std::env::var("CHITTA_TYPE_WEIGHTS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| parse_type_weights(&s))
+            .unwrap_or_default();
 
         if rrf_sparse && !rrf_fts {
             tracing::warn!(
@@ -118,6 +125,7 @@ impl Config {
                 rrf_candidates,
                 dedup_field,
                 dedup_fetch_factor,
+                type_weights,
             },
             sparse_threshold,
         })
@@ -130,6 +138,15 @@ impl Config {
     pub fn tokenizer_file(&self) -> PathBuf {
         self.model_path.join("tokenizer.json")
     }
+}
+
+fn parse_type_weights(s: &str) -> HashMap<String, f32> {
+    s.split(',')
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            Some((k.trim().to_string(), v.trim().parse::<f32>().ok()?))
+        })
+        .collect()
 }
 
 fn parse_env_or<T: std::str::FromStr + std::fmt::Display>(name: &str, default: T) -> T {

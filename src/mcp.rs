@@ -164,7 +164,7 @@ impl ServerHandler for ChittaServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "chitta-rs v0.0.2 — agent-native persistent memory. \
+                "chitta-rs v0.0.3 — agent-native persistent memory. \
                  Seven tools: store_memory, get_memory, search_memories, \
                  update_memory, delete_memory, list_recent_memories, health_check. \
                  Profiles isolate namespaces; idempotency_key dedupes writes; \

@@ -126,6 +126,15 @@ pub async fn search_hybrid(
         hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
     }
 
+    if !search_cfg.type_weights.is_empty() {
+        for hit in &mut hits {
+            if let Some(&w) = search_cfg.type_weights.get(&hit.memory_type) {
+                hit.similarity *= w;
+            }
+        }
+        hits.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
     Ok((hits, total))
 }
 
