@@ -2,10 +2,16 @@
 
 ## Active
 
+- **manas-architecture.md** — manas OS architecture. Subsystem contracts, session lifecycle, design principles.
 - **principles.md** — foundational principles. Override convenience. Change requires its own PR.
 - **research/master-plan.md** — strategic direction, north star, capability areas.
 - **pre-v0.0.3-roadmap.md** — revised roadmap after Round 1-2 experiments. Hybrid retrieval + agent-native quality.
+- **plans/collaborative-cognition.md** — memory types, observations, /done, /reflect implementation plan.
+- **plans/smriti-sketch.md** — smriti design sketch. Content-addressed filesystem indexer with temporal history.
 - **plans/obsidian-ingestion-test.md** — test plan for Obsidian vault import as domain-knowledge benchmark.
+- **plans/aion-share-refactor.md** — engine/server split, allowlist memory_type, embedder sidecar; preparing chitta to be shared between manas and aion.
+- **plans/astrology-benchmark-plan.md** — astrobench build plan; retrieval benchmark on `~/vault/astro/` with four query slices, slice D gates the KG decision.
+- **astrobench-query-authoring.md** — spec for hand-authoring the astrobench query set.
 
 ## Benchmark analysis
 

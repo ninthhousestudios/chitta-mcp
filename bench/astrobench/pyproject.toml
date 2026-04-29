@@ -1,0 +1,19 @@
+[project]
+name = "astrobench"
+version = "0.1.0"
+description = "Astrology retrieval benchmark for chitta-rs"
+requires-python = ">=3.11"
+dependencies = [
+    "onnxruntime>=1.18,<2",
+    "tokenizers>=0.20,<1",
+    "psycopg[binary]>=3.1,<4",
+    "pgvector>=0.3,<1",
+    "numpy>=1.26,<3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

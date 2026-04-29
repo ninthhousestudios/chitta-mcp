@@ -7,6 +7,7 @@
 - vCPU: 12+
 - RAM: 32GB+
 - Disk: 80GB+ (WAL bloat from bulk postgres can eat 40-50GB)
+- bloat problem fixed. avergae around 27gb during benchs, so can do about 30gb next time
 
 Do NOT use Docker Hub images (rate-limited on RunPod) or Ubuntu 20.04 (ships PG 12, pgvector needs 13+).
 

@@ -4,3 +4,13 @@
 .sessions/
 rust/
 *.tar.gz
+*.zip
+docs/handoff.md
+bench/astrobench/.venv/
+bench/astrobench/uv.lock
+bench/astrobench/__pycache__/
+bench/astrobench/*.pyc
+bench/astrobench/outputs/
+bench/astrobench/hapax-candidates.txt
+bench/datasets/astrobench/snapshot-*.dump
+.sutra/
