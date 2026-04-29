@@ -1,90 +1,132 @@
-# chitta-rs
+# chitta
 
-Agent-native persistent memory server — Rust rewrite of chitta, speaking MCP
-over stdio. v0.0.1 is a narrow slice: one backend (Postgres + pgvector), one
-embedder (BGE-M3 ONNX), three tools (`store_memory`, `get_memory`,
-`search_memories`), verbatim storage, bi-temporal rows, idempotent writes,
-actionable errors.
+Agent-native persistent memory server, speaking MCP over stdio or
+Streamable HTTP. Postgres + pgvector backend, BGE-M3 ONNX embedder,
+seven tools, verbatim storage, bi-temporal rows, typed memories,
+idempotent writes, actionable errors.
 
 See [`docs/principles.md`](docs/principles.md) for the contract this server
-upholds and [`docs/starting-shape.md`](docs/starting-shape.md) for the wire
-shape and design rationale.
+upholds.
 
 ## Prerequisites
 
 - **Rust** stable (edition 2024 — 1.85+).
 - **Postgres 16+** with the [`pgvector`](https://github.com/pgvector/pgvector)
   extension installed.
-- **BGE-M3 ONNX model** at `~/.cache/chitta/bge-m3-onnx/` containing
-  `bge_m3_model.onnx` (plus its `.onnx_data` sidecar if the export is
-  external-data) and `tokenizer.json`. We use the
-  [`yuniko-software/bge-m3-onnx`](https://huggingface.co/yuniko-software/bge-m3-onnx)
-  export, which emits a pre-pooled, L2-normalized `dense_embeddings` tensor.
+- **BGE-M3 ONNX model** — `bge_m3_model.onnx` (plus `.onnx_data` sidecar)
+  and `tokenizer.json`. Default location: `~/.chitta/models/bge-m3-onnx/`.
+  The upstream [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) ONNX export
+  works, as does a custom export with dense/sparse heads.
 - **ONNX Runtime shared library.** Either install `onnxruntime` via your
   package manager or reuse the copy shipped with Python's `onnxruntime`
   wheel; point `ORT_DYLIB_PATH` at it if it's not on the default loader path.
 
-## Quickstart
+## Install
 
 ```bash
 createdb chitta_rs
-cp .env.example .env          # edit DATABASE_URL if needed
-cargo build --release         # compile the binary
+psql chitta_rs -c 'create extension if not exists vector'
+cargo install --path .
 ```
 
-The binary is a stdio-transport MCP server. It reads JSON-RPC frames from
-stdin and writes responses to stdout; logs go to stderr. **Do not run
-`cargo run` bare in a terminal** — the process will block waiting for an
-MCP client to speak JSON-RPC on stdin, and look hung. Launch it from an
-MCP client instead (see below).
+This places the `chitta` binary in `~/.cargo/bin/`.
 
-## Connecting from an MCP client
+## Configuration
 
-Point your client's server entry at the compiled binary. For Claude Code's
-`settings.json`:
+All configuration is via environment variables. Place a `.env` file at
+`~/.chitta/.env` — it is loaded automatically at startup. A `.env` in the
+working directory is also loaded as a fallback.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `CHITTA_HOME` | `~/.chitta` | Data directory root. |
+| `DATABASE_URL` | `postgresql://localhost/chitta_rs` | libpq-compatible Postgres URL. |
+| `CHITTA_MODEL_PATH` | `~/.chitta/models/bge-m3-onnx` | Directory with the ONNX model + tokenizer. |
+| `CHITTA_LOG_LEVEL` | `info` | `tracing_subscriber` env filter syntax. |
+| `CHITTA_HTTP_ADDR` | `127.0.0.1` | HTTP listen address (with `--http`). |
+| `CHITTA_HTTP_PORT` | `3100` | HTTP listen port (with `--http`). |
+| `ORT_DYLIB_PATH` | *(loader default)* | Path to `libonnxruntime.so`. |
+
+See [`.env.example`](.env.example) for the full list including pool tuning
+and retrieval scoring knobs.
+
+## Running
+
+### Stdio (default)
+
+The binary is a stdio-transport MCP server. It reads JSON-RPC from stdin
+and writes responses to stdout; logs go to stderr.
 
 ```json
 {
   "mcpServers": {
-    "chitta-rs": {
-      "command": "/path/to/chitta/rust/target/release/chitta-rs",
-      "env": {
-        "DATABASE_URL": "postgres://localhost/chitta_rs",
-        "CHITTA_MODEL_PATH": "/home/you/.cache/chitta/bge-m3-onnx"
+    "chitta": {
+      "command": "/home/you/.cargo/bin/chitta"
+    }
+  }
+}
+```
+
+### Streamable HTTP
+
+```bash
+chitta --http --auth-token-file ~/.chitta/bearer-token.txt
+```
+
+Serves on `http://127.0.0.1:3100/mcp` with bearer-token auth. Client config:
+
+```json
+{
+  "mcpServers": {
+    "chitta": {
+      "type": "http",
+      "url": "http://127.0.0.1:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
       }
     }
   }
 }
 ```
 
-`cargo build --release` first, then restart the client.
+### systemd (user service)
 
-## Configuration
+```ini
+[Unit]
+Description=chitta MCP memory server (HTTP)
+After=postgresql.service
 
-| Variable | Default | Notes |
-|---|---|---|
-| `DATABASE_URL` | *(required)* | libpq-compatible Postgres URL. |
-| `CHITTA_MODEL_PATH` | `~/.cache/chitta/bge-m3-onnx` | Directory with the ONNX model + tokenizer. **Must be an absolute path** — no `~` expansion is performed. The default is constructed from `$HOME` at startup. |
-| `CHITTA_LOG_LEVEL` | `info` | `tracing_subscriber` env filter syntax. |
-| `ORT_DYLIB_PATH` | *(loader default)* | Path to `libonnxruntime.so` when it's not on the default path. |
+[Service]
+EnvironmentFile=%h/.chitta/.env
+ExecStartPre=/bin/sh -c 'until pg_isready -q; do sleep 1; done'
+ExecStart=%h/.cargo/bin/chitta --http --auth-token-file %h/.chitta/bearer-token.txt
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
 
 ## Tools
 
-| Tool | Purpose | Idempotency |
-|---|---|---|
-| `store_memory` | Persist verbatim content with optional `event_time` and `tags`. | Keyed on `(profile, idempotency_key)` — same key returns the prior row with `idempotent_replay=true`. |
-| `get_memory` | Fetch one memory by profile + UUID. | Read-only. |
-| `search_memories` | Cosine-similarity search with tag filter, similarity floor, and token-budget truncation. | Read-only. Returns the standard envelope (`results`, `truncated`, `total_available`, `budget_spent_tokens`). |
+| Tool | Purpose |
+|---|---|
+| `store_memory` | Persist verbatim content with optional `event_time`, `tags`, `memory_type`, `metadata`. Idempotent on `(profile, idempotency_key)`. |
+| `get_memory` | Fetch one memory by profile + UUID. |
+| `search_memories` | Semantic search with tag/type filters, similarity floor, and token-budget truncation. |
+| `update_memory` | Update content, tags, type, or metadata. Re-embeds on content change. |
+| `delete_memory` | Hard-delete by profile + id. |
+| `list_recent_memories` | List by `record_time` DESC with tag/type filters. |
+| `health_check` | Verify DB connectivity and embedder responsiveness. |
+
+Memory types: `memory`, `observation`, `decision`, `session_summary`, `mental_model`.
 
 ## Testing
 
-### Unit + contract tests
-
-No external dependencies. Run:
+### Unit tests
 
 ```bash
 cargo test --lib
-cargo test --test contract
 ```
 
 ### Integration tests
@@ -95,14 +137,11 @@ Require a live Postgres with pgvector and the ONNX model on disk:
 createdb chitta_rs_test
 psql chitta_rs_test -c 'create extension if not exists vector'
 export TEST_DATABASE_URL=postgres://localhost/chitta_rs_test
-# If libonnxruntime is not on the default loader path:
-# export ORT_DYLIB_PATH=/path/to/libonnxruntime.so
 cargo test --test integration
 ```
 
 Tests without `TEST_DATABASE_URL` set (or with the model missing) print a
-`SKIPPED:` line and pass — so `cargo test` stays useful in environments
-without the full stack.
+`SKIPPED:` line and pass.
 
 ### Lint
 
@@ -110,13 +149,10 @@ without the full stack.
 cargo clippy --all-targets -- -D warnings
 ```
 
-## What's deferred to v0.0.2+
+## CLI subcommands
 
-- HTTP transport (`--http` is stubbed and exits with a deferral message).
-- Tag-AND search, full-text filter, time-range filter.
-- Additional tools (`list_recent_memories`, `delete_memory`, graph walks).
-- Automatic migration of Python chitta data.
-- Embedder alternatives beyond ONNX BGE-M3.
-
-See [`docs/starting-shape.md`](docs/starting-shape.md) for the full list and
-the reasoning behind each deferral.
+| Command | Purpose |
+|---|---|
+| `serve` | Run as MCP server (default). |
+| `replay` | Re-run logged queries for retrieval regression detection. |
+| `backfill` | Backfill sparse embeddings for rows that have none. |
