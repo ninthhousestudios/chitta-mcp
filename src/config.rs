@@ -2,11 +2,15 @@
 //!
 //! Loaded once at startup via [`Config::from_env`]. No file formats, no
 //! runtime reconfiguration — restart to change settings.
+//!
+//! Default data directory: `~/.chitta/`. Override with `CHITTA_HOME`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::error::{ChittaError, Result};
+use crate::error::Result;
+
+const DEFAULT_DATABASE_URL: &str = "postgresql://josh:ogham@localhost/chitta_rs";
 
 /// Search-related configuration bundled to reduce positional-parameter sprawl.
 #[derive(Debug, Clone)]
@@ -46,12 +50,8 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let database_url = std::env::var("DATABASE_URL").map_err(|_| ChittaError::MissingConfig {
-            name: "DATABASE_URL",
-            next_action:
-                "Set DATABASE_URL in the environment or .env file (e.g. postgres://localhost/chitta_rs)."
-                    .to_string(),
-        })?;
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
 
         let model_path = std::env::var_os("CHITTA_MODEL_PATH")
             .map(PathBuf::from)
@@ -184,14 +184,21 @@ fn parse_env_or<T: std::str::FromStr + std::fmt::Display>(name: &str, default: T
     }
 }
 
-fn default_model_path() -> PathBuf {
+/// `~/.chitta/`. Overridable via `CHITTA_HOME`.
+pub fn chitta_home() -> PathBuf {
+    if let Some(v) = std::env::var_os("CHITTA_HOME") {
+        return PathBuf::from(v);
+    }
     if let Some(home) = std::env::var_os("HOME") {
         let mut p = PathBuf::from(home);
-        p.push(".cache/chitta/bge-m3-onnx");
-        p
-    } else {
-        PathBuf::from(".cache/chitta/bge-m3-onnx")
+        p.push(".chitta");
+        return p;
     }
+    PathBuf::from(".chitta")
+}
+
+fn default_model_path() -> PathBuf {
+    chitta_home().join("models/bge-m3-onnx")
 }
 
 #[cfg(test)]
@@ -244,16 +251,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_database_url_is_invalid_params() {
+    fn missing_database_url_uses_default() {
         with_env(&[("DATABASE_URL", None)], || {
-            let err = Config::from_env().unwrap_err();
-            match err {
-                ChittaError::MissingConfig { name, next_action } => {
-                    assert_eq!(name, "DATABASE_URL");
-                    assert!(next_action.contains("DATABASE_URL"));
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
+            let cfg = Config::from_env().unwrap();
+            assert_eq!(cfg.database_url, DEFAULT_DATABASE_URL);
         });
     }
 
@@ -268,7 +269,7 @@ mod tests {
             || {
                 let cfg = Config::from_env().unwrap();
                 assert_eq!(cfg.log_level, "info");
-                assert!(cfg.model_path.ends_with(".cache/chitta/bge-m3-onnx"));
+                assert!(cfg.model_path.ends_with(".chitta/models/bge-m3-onnx"));
                 assert!(cfg.model_file().ends_with("bge_m3_model.onnx"));
                 assert!(cfg.tokenizer_file().ends_with("tokenizer.json"));
             },

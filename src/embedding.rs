@@ -268,9 +268,11 @@ impl Embedder {
                         let embed_result = (|| {
                             let dense = outputs
                                 .get("dense_embeddings")
+                                .or_else(|| outputs.get("sentence_embedding"))
                                 .ok_or_else(|| ChittaError::Embedding {
                                     tool,
-                                    message: "ONNX session produced no `dense_embeddings` output"
+                                    message: "ONNX session produced no dense output \
+                                        (tried `dense_embeddings`, `sentence_embedding`)"
                                         .to_string(),
                                     next_action: "Report this as a bug; include server logs."
                                         .to_string(),

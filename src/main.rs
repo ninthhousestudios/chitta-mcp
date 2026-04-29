@@ -10,11 +10,11 @@ use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use chitta_rs::{config::Config, db, embedding::Embedder, mcp::ChittaServer};
+use chitta_rs::{config::{Config, chitta_home}, db, embedding::Embedder, mcp::ChittaServer};
 
-/// chitta-rs: agent-native persistent memory MCP server.
+/// chitta: agent-native persistent memory MCP server.
 #[derive(Debug, Parser)]
-#[command(name = "chitta-rs", version, about)]
+#[command(name = "chitta", version, about)]
 struct Cli {
     /// Run as a Streamable HTTP server instead of stdio.
     #[arg(long)]
@@ -59,7 +59,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Best-effort: .env may not exist, that's fine.
+    // Load .env from ~/.chitta/.env first, then CWD as fallback.
+    let _ = dotenvy::from_path(chitta_home().join(".env"));
     let _ = dotenvy::dotenv();
 
     let cli = Cli::parse();

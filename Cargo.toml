@@ -1,6 +1,6 @@
 [package]
 name = "chitta-rs"
-version = "0.0.3"
+version = "0.1.0"
 edition = "2024"
 description = "Self-hosted agent-native persistent memory and learning system (Rust rewrite)."
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,7 @@ name = "chitta_rs"
 path = "src/lib.rs"
 
 [[bin]]
-name = "chitta-rs"
+name = "chitta"
 path = "src/main.rs"
 
 [dependencies]
